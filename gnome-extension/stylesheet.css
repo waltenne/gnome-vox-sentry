@@ -1,0 +1,81 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/* Copyright (C) 2026 Vox Sentry contributors */
+
+.vox-sentry-indicator { padding: 0 7px; }
+
+.vox-sentry-traffic-light {
+    spacing: 2px;
+    padding: 3px 6px;
+    border-radius: 999px;
+    background-color: transparent;
+}
+
+.vox-sentry-lamp {
+    padding: 0;
+    margin: 0;
+    font-size: 16px;
+    line-height: 1;
+    /* Keep the traffic light visible in every state.  The inactive lamps
+       use GNOME's theme-aware insensitive color instead of disappearing. */
+    color: -st-insensitive-color;
+    opacity: 0.58;
+}
+
+.vox-sentry-lamp.active {
+    opacity: 1;
+    text-shadow: 0 0 3px currentColor;
+}
+.vox-sentry-lamp-red-active { color: #ff5f57; }
+.vox-sentry-lamp-amber-active { color: #f5c451; }
+.vox-sentry-lamp-green-active { color: #45d483; }
+
+.vox-sentry-status-item { padding-top: 7px; padding-bottom: 2px; }
+.vox-sentry-status-label { font-weight: 600; }
+.vox-sentry-status-detail-item { padding-top: 0; padding-bottom: 7px; }
+.vox-sentry-status-detail { color: inherit; opacity: 0.68; font-size: 0.9em; }
+.vox-sentry-menu-icon { margin-right: 6px; color: inherit; }
+.vox-sentry-provider-item {
+    padding-top: 5px;
+    padding-bottom: 5px;
+    color: inherit;
+}
+.vox-sentry-provider-item:focus,
+.vox-sentry-provider-item:hover,
+.vox-sentry-provider-item:active,
+.vox-sentry-provider-item:checked {
+    color: inherit;
+    background-color: transparent;
+}
+.vox-sentry-provider-item StLabel { font-weight: 600; }
+.vox-sentry-provider-label { margin-left: 5px; }
+.vox-sentry-provider-icon { color: inherit; }
+.popup-sub-menu.vox-sentry-provider-menu {
+    color: inherit;
+    background-color: transparent;
+    border-color: transparent;
+}
+.popup-sub-menu.vox-sentry-provider-menu .popup-menu-item,
+.popup-sub-menu.vox-sentry-provider-menu .popup-menu-item:focus,
+.popup-sub-menu.vox-sentry-provider-menu .popup-menu-item:hover,
+.popup-sub-menu.vox-sentry-provider-menu .popup-menu-item:active,
+.popup-sub-menu.vox-sentry-provider-menu .popup-menu-item:checked {
+    color: inherit;
+    background-color: transparent;
+}
+.popup-sub-menu.vox-sentry-provider-menu .popup-menu-item:hover,
+.popup-sub-menu.vox-sentry-provider-menu .popup-menu-item:focus {
+    background-color: -st-hover-highlight-color;
+}
+.vox-sentry-provider-status-red { color: #ff5f57; }
+.vox-sentry-provider-status-amber { color: #f5c451; }
+.vox-sentry-provider-status-green { color: #45d483; }
+
+.vox-sentry-usage-item { spacing: 5px; }
+.vox-sentry-usage-label { color: inherit; opacity: 0.68; }
+.vox-sentry-usage-value { font-weight: 600; }
+.vox-sentry-usage-value.info { color: inherit; }
+.vox-sentry-usage-value.tokens { color: #c9a7ff; }
+.vox-sentry-usage-value.healthy { color: #45d483; }
+.vox-sentry-usage-value.warning { color: #f5c451; }
+.vox-sentry-usage-value.critical { color: #ff5f57; }
+.vox-sentry-usage-value.reset { color: inherit; opacity: 0.58; font-weight: 400; }
