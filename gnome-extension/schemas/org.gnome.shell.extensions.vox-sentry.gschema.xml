@@ -1,0 +1,19 @@
+<!-- SPDX-License-Identifier: GPL-2.0-or-later -->
+<!-- Copyright (C) 2026 Vox Sentry contributors -->
+
+<schemalist>
+  <schema id="org.gnome.shell.extensions.vox-sentry" path="/org/gnome/shell/extensions/vox-sentry/">
+    <key name="provider-mode" type="s"><default>'auto'</default><summary>Provider mode</summary></key>
+    <key name="show-connected-only" type="b"><default>true</default><summary>Show only connected providers</summary></key>
+    <key name="show-multiple-sessions" type="b"><default>true</default><summary>Show multiple sessions</summary></key>
+    <key name="show-usage" type="b"><default>true</default><summary>Show usage when available</summary></key>
+    <key name="show-limits" type="b"><default>true</default><summary>Show usage limits when available</summary></key>
+    <key name="notifications-enabled" type="b"><default>true</default><summary>Enable notifications</summary></key>
+    <key name="sounds-enabled" type="b"><default>true</default><summary>Enable notification sounds</summary></key>
+    <key name="sound-waiting" type="s"><default>''</default><summary>Waiting notification sound</summary></key>
+    <key name="sound-completed" type="s"><default>''</default><summary>Completed notification sound</summary></key>
+    <key name="sound-error" type="s"><default>''</default><summary>Error notification sound</summary></key>
+    <key name="sound-rate-limited" type="s"><default>''</default><summary>Rate limit notification sound</summary></key>
+    <key name="refresh-interval" type="i"><default>2</default><summary>Refresh interval</summary></key>
+  </schema>
+</schemalist>

@@ -1,0 +1,17 @@
+[Unit]
+Description=Vox Sentry coding-agent monitor
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/gnome-vox-sentry/venv/bin/python -m vox_sentry.daemon
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=%h
+Environment=CODEX_HOME=%h/.codex
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15s
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,497 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Copyright (C) 2026 Vox Sentry contributors
+
+import Clutter from 'gi://Clutter';
+import GObject from 'gi://GObject';
+import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
+import St from 'gi://St';
+import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import {NotificationManager} from './notificationManager.js';
+import {presentationFor, statusClassFor} from './statusPresentation.js';
+
+const BUS = 'io.github.gnome_vox_sentry';
+const PATH = '/io/github/gnome_vox_sentry';
+const IFACE = 'io.github.gnome_vox_sentry';
+
+function formatReset(window) {
+    const timestamp = Number(window && window.resetsAt);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return '';
+    const date = new Date(timestamp * 1000);
+    if (!Number.isFinite(date.getTime())) return '';
+
+    const time = date.toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'});
+    if (Number(window.windowDurationMins) >= 10080) {
+        const day = date.toLocaleDateString(undefined, {day: 'numeric', month: 'short'});
+        return ` · reset ${day} · ${time}`;
+    }
+    return ` · reset ${time}`;
+}
+
+function isCancelled(error) {
+    return error instanceof GLib.Error && error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED);
+}
+
+const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelMenu.Button {
+    _init(settings, openPreferences) {
+        super._init(0.0, 'Vox Sentry');
+        this.add_style_class_name('vox-sentry-indicator');
+        this._settings = settings;
+        this._openPreferencesCallback = openPreferences;
+        this._settingsSignal = this._settings.connect('changed', () => {
+            if (this._snapshot && !this.menu.isOpen) this._render(this._snapshot, true);
+        });
+        this._signalIds = [];
+        this._refreshSource = 0;
+        this._statusCancellable = null;
+        this._refreshCancellable = null;
+        this._statusTestSource = 0;
+        this._statusTest = null;
+        this._notificationManager = new NotificationManager(settings);
+        this._statusDot = new St.DrawingArea({
+            style_class: 'vox-sentry-status-dot',
+            x_expand: false,
+            y_expand: false,
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._statusDot.set_size(16, 16);
+        this._statusDot.connect('repaint', area => this._repaintStatusDot(area));
+        this._statusClass = null;
+        this._setStatusClass('UNKNOWN');
+        this.add_child(this._statusDot);
+        this._title = new PopupMenu.PopupMenuItem('Vox Sentry');
+        this._title.actor.reactive = false;
+        this._title.actor.add_style_class_name('vox-sentry-status-item');
+        this._title.label.add_style_class_name('vox-sentry-status-label');
+        this.menu.addMenuItem(this._title);
+        this._statusDetail = new PopupMenu.PopupMenuItem('Connecting to agents…');
+        this._statusDetail.actor.reactive = false;
+        this._statusDetail.actor.add_style_class_name('vox-sentry-status-detail-item');
+        this._statusDetail.label.add_style_class_name('vox-sentry-status-detail');
+        this.menu.addMenuItem(this._statusDetail);
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._providers = new PopupMenu.PopupMenuSection();
+        this.menu.addMenuItem(this._providers);
+        this._menuKey = null;
+        this._lastProviderStates = null;
+        this._pendingReady = new Map();
+        this._refresh = new PopupMenu.PopupMenuItem('Refresh status');
+        this._refresh.connect('activate', () => this._refreshNow());
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this.menu.addMenuItem(this._refresh);
+        this._settingsItem = new PopupMenu.PopupMenuItem('Settings');
+        this._settingsItem.actor.insert_child_at_index(new St.Icon({
+            icon_name: 'emblem-system-symbolic',
+            icon_size: 16,
+            style_class: 'vox-sentry-menu-icon',
+        }), 0);
+        this._settingsItem.connect('activate', () => this._openPreferences());
+        this.menu.addMenuItem(this._settingsItem);
+        this._menuSignal = this.menu.connect('open-state-changed', (_menu, open) => {
+            if (!open && this._snapshot) this._renderMenu(this._snapshot);
+        });
+        try {
+            this._proxy = Gio.DBusProxy.new_for_bus_sync(Gio.BusType.SESSION, Gio.DBusProxyFlags.NONE, null, BUS, PATH, IFACE, null);
+            this._signalIds.push(this._proxy.connect('g-signal', (_proxy, _sender, signal, parameters) => {
+                if (signal === 'StatusChanged') this._load();
+                if (signal === 'NotificationTest') this._showTestNotification(parameters.deep_unpack()[0]);
+                if (signal === 'StatusTest') this._showStatusTest(parameters.deep_unpack()[0]);
+            }));
+            // The daemon may start after GNOME Shell has already enabled the
+            // extension. Reload when its well-known D-Bus name appears.
+            this._signalIds.push(this._proxy.connect('notify::g-name-owner', () => this._load()));
+            this._load();
+            // Also cover a daemon restart where the proxy does not emit a
+            // name-owner notification on older GNOME/GJS versions.
+            this._refreshSource = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 5, () => {
+                if (!this._proxy) return GLib.SOURCE_REMOVE;
+                this._load();
+                return GLib.SOURCE_CONTINUE;
+            });
+        } catch (error) {
+            log(`Vox Sentry D-Bus connection failed: ${error.message}`);
+            this._render({status: 'OFFLINE', sessions: []});
+        }
+    }
+
+    _load() {
+        if (!this._proxy || this._statusCancellable) return;
+        const cancellable = new Gio.Cancellable();
+        this._statusCancellable = cancellable;
+        this._proxy.call('GetStatus', null, Gio.DBusCallFlags.NONE, 1500, cancellable, (_proxy, result) => {
+            if (this._statusCancellable !== cancellable) return;
+            this._statusCancellable = null;
+            try {
+                const reply = this._proxy.call_finish(result);
+                this._render(JSON.parse(reply.deep_unpack()[0]));
+            } catch (error) {
+                if (isCancelled(error)) return;
+                log(`Vox Sentry status request failed: ${error.message}`);
+                this._render({status: 'OFFLINE', sessions: []});
+            }
+        });
+    }
+
+    _refreshNow() {
+        if (!this._proxy || this._refreshCancellable) return;
+        this._refresh.label.text = 'Refreshing…';
+        const cancellable = new Gio.Cancellable();
+        this._refreshCancellable = cancellable;
+        try {
+            this._proxy.call('Reload', null, Gio.DBusCallFlags.NONE, 3000, cancellable, (_proxy, result) => {
+                if (this._refreshCancellable !== cancellable) return;
+                this._refreshCancellable = null;
+                if (!this._refresh) return;
+                this._refresh.label.text = 'Refresh status';
+                try {
+                    const reply = this._proxy.call_finish(result);
+                    this._render(JSON.parse(reply.deep_unpack()[0]));
+                } catch (error) {
+                    if (isCancelled(error)) return;
+                    log(`Vox Sentry refresh failed: ${error.message}`);
+                    this._load();
+                }
+            });
+        } catch (error) {
+            this._refreshCancellable = null;
+            this._refresh.label.text = 'Refresh status';
+            log(`Vox Sentry refresh failed: ${error.message}`);
+            this._load();
+        }
+    }
+
+    _openPreferences() {
+        this._openPreferencesCallback();
+    }
+
+    _showTestNotification(eventType) {
+        const labels = {
+            WAITING: 'Waiting',
+            COMPLETED: 'Completed',
+            ERROR: 'Error',
+            RATE_LIMITED: 'Rate limited',
+        };
+        const label = labels[eventType] || 'Notification';
+        this._notificationManager.notify(
+            'Vox Sentry · Test',
+            `${label} notification test — using the current sound configuration.`,
+            eventType);
+    }
+
+    _showStatusTest(status) {
+        const presentation = presentationFor(status);
+        if (this._statusTestSource) {
+            GLib.Source.remove(this._statusTestSource);
+            this._statusTestSource = 0;
+        }
+        this._statusTest = {status, label: presentation.indicatorLabel};
+        this._render(this._snapshot || {status: 'UNKNOWN', sessions: []}, true);
+        this._statusTestSource = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 5, () => {
+            this._statusTestSource = 0;
+            this._statusTest = null;
+            if (this._snapshot) this._render(this._snapshot, true);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    _render(snapshot, force = false) {
+        const snapshotKey = JSON.stringify({...snapshot, generatedAt: undefined});
+        if (!force && this._snapshotKey === snapshotKey) return;
+        this._snapshot = snapshot;
+        this._snapshotKey = snapshotKey;
+        if (!this._statusDot || !this._title) return;
+        const status = snapshot.status || 'UNKNOWN';
+        const connectedProviders = this._connectedProviders(snapshot);
+        const providerNames = connectedProviders
+            .map(provider => provider.name);
+        const subject = providerNames.length ? providerNames.join(', ') : 'Agent';
+        const actualPresentation = presentationFor(status);
+        const details = {
+            WORKING: `${subject} is processing`,
+            THINKING: `${subject} is planning`,
+            IDLE: `${subject} is idle`,
+            COMPLETED: 'The last task finished',
+            WAITING: `${subject} needs your input`,
+            UNKNOWN: 'Waiting for a status update',
+            OFFLINE: 'The local monitor is unavailable',
+            ERROR: `${subject} reported an error`,
+            RATE_LIMITED: `${subject} usage is currently limited`,
+        };
+        this._setStatusClass(this._statusTest ? this._statusTest.status : status);
+        this._title.label.text = this._statusTest
+            ? `Vox Sentry · Color test · ${this._statusTest.label}`
+            : `Vox Sentry · ${actualPresentation.indicatorLabel}`;
+        this._statusDetail.label.text = this._statusTest
+            ? 'Temporary preview — restoring real status in 5 seconds'
+            : details[status] || details.UNKNOWN;
+        this._notifyProviderTransitions(connectedProviders, snapshot);
+        if (this.menu.isOpen) return;
+        this._renderMenu(snapshot);
+    }
+
+    _setStatusClass(status) {
+        const nextClass = statusClassFor(status);
+        if (this._statusClass === nextClass || !this._statusDot) return;
+        if (this._statusClass) this._statusDot.remove_style_class_name(this._statusClass);
+        this._statusDot.add_style_class_name(nextClass);
+        this._statusClass = nextClass;
+        this._statusDot.queue_repaint();
+    }
+
+    _repaintStatusDot(area) {
+        const context = area.get_context();
+        const themeColor = area.get_theme_node().get_foreground_color();
+        const width = area.get_width();
+        const height = area.get_height();
+        const radius = Math.min(width, height) / 2;
+        context.setSourceRGBA(
+            themeColor.red / 255,
+            themeColor.green / 255,
+            themeColor.blue / 255,
+            themeColor.alpha / 255);
+        context.arc(width / 2, height / 2, radius, 0, 2 * Math.PI);
+        context.fill();
+    }
+
+    _connectedProviders(snapshot) {
+        return (snapshot.providers || []).filter(provider =>
+            provider.active !== false && provider.status && provider.status !== 'OFFLINE');
+    }
+
+    _visibleProviders(snapshot) {
+        if (this._settings.get_boolean('show-connected-only') !== false)
+            return this._connectedProviders(snapshot);
+        return snapshot.providers || [];
+    }
+
+    _notifyProviderTransitions(providers, snapshot) {
+        const current = Object.fromEntries(providers.map(provider => [provider.id, provider.status]));
+        for (const providerId of this._pendingReady.keys()) {
+            if (!(providerId in current)) this._pendingReady.delete(providerId);
+        }
+        if (this._lastProviderStates === null) {
+            this._lastProviderStates = current;
+            return;
+        }
+        const byId = Object.fromEntries(providers.map(provider => [provider.id, provider]));
+        for (const [providerId, nextStatus] of Object.entries(current)) {
+            const previousStatus = this._lastProviderStates[providerId];
+            if (!previousStatus) continue;
+            const provider = byId[providerId];
+            let message = null;
+            let eventType = null;
+            const activeSession = (snapshot.sessions || []).some(session =>
+                session.provider === providerId &&
+                ['WORKING', 'THINKING', 'WAITING'].includes(session.status));
+            const becameReady = ['WORKING', 'THINKING'].includes(previousStatus) &&
+                ['IDLE', 'COMPLETED'].includes(nextStatus);
+            if (['WORKING', 'THINKING'].includes(nextStatus) ||
+                (['IDLE', 'COMPLETED'].includes(nextStatus) && activeSession)) {
+                // A short IDLE gap can occur while Codex closes one item and
+                // appends the next one. Never announce readiness while a
+                // normalized provider session is still active.
+                this._pendingReady.delete(providerId);
+                continue;
+            }
+            if (nextStatus === 'COMPLETED' && becameReady) {
+                message = 'completed the task.';
+                eventType = 'COMPLETED';
+            } else if (nextStatus === 'IDLE' && (becameReady || this._pendingReady.has(providerId))) {
+                const pending = this._pendingReady.get(providerId);
+                const confirmations = pending ? pending.confirmations + 1 : 1;
+                if (confirmations < 2) {
+                    this._pendingReady.set(providerId, {confirmations});
+                    continue;
+                }
+                this._pendingReady.delete(providerId);
+                message = 'is ready.';
+                eventType = 'COMPLETED';
+            } else if (previousStatus === nextStatus) {
+                continue;
+            } else if (nextStatus === 'RATE_LIMITED' && previousStatus !== 'RATE_LIMITED') {
+                this._pendingReady.delete(providerId);
+                message = 'reached its usage limit.';
+                eventType = 'RATE_LIMITED';
+            } else if (nextStatus === 'WAITING' && previousStatus !== 'WAITING') {
+                this._pendingReady.delete(providerId);
+                message = 'is waiting for your input.';
+                eventType = 'WAITING';
+            } else if (nextStatus === 'ERROR' && previousStatus !== 'ERROR') {
+                this._pendingReady.delete(providerId);
+                message = 'reported an error.';
+                eventType = 'ERROR';
+            }
+            if (message) this._notify(message[0].toUpperCase() + message.slice(1), `${provider.name} · Vox Sentry`, eventType);
+        }
+        this._lastProviderStates = current;
+    }
+
+    _providerIcon() {
+        return new St.Icon({
+            gicon: Gio.ThemedIcon.new('applications-development-symbolic'),
+            icon_size: 16,
+            style_class: 'vox-sentry-provider-icon',
+        });
+    }
+
+    _notify(body, title = 'Vox Sentry', eventType = null) {
+        this._notificationManager.notify(title, body, eventType);
+    }
+
+    _renderMenu(snapshot) {
+        if (!this._providers) return;
+        const menuKey = JSON.stringify({
+            snapshot: this._snapshotKey,
+            multipleSessions: this._settings.get_boolean('show-multiple-sessions'),
+            showUsage: this._settings.get_boolean('show-usage'),
+            showLimits: this._settings.get_boolean('show-limits'),
+            showConnectedOnly: this._settings.get_boolean('show-connected-only'),
+        });
+        if (this._menuKey === menuKey) return;
+        this._menuKey = menuKey;
+        this._providers.removeAll();
+        const allSessions = snapshot.sessions || [];
+        const showMultipleSessions = this._settings.get_boolean('show-multiple-sessions') !== false;
+        const showUsage = this._settings.get_boolean('show-usage') !== false;
+        const showLimits = this._settings.get_boolean('show-limits') !== false;
+        const addLine = (menu, label, value, valueClass = 'info') => {
+            const item = new PopupMenu.PopupBaseMenuItem({reactive: false, style_class: 'vox-sentry-usage-item'});
+            item.add_child(new St.Label({text: `${label}:`, style_class: 'vox-sentry-usage-label'}));
+            const parts = Array.isArray(value) ? value : [{text: value, style_class: valueClass}];
+            for (const part of parts) {
+                if (part.text) item.add_child(new St.Label({text: part.text, style_class: `vox-sentry-usage-value ${part.style_class || valueClass}`}));
+            }
+            menu.addMenuItem(item);
+        };
+        const addUsage = (menu, usage) => {
+            if (!showUsage || !usage) return;
+            const details = usage.details || {};
+            let count = 0;
+            const formatTokens = value => value == null ? null : `${(Number(value) / 1000000).toFixed(1)}M tokens`;
+            if (details.todayTokens != null) { addLine(menu, 'Today', formatTokens(details.todayTokens), 'tokens'); count++; }
+            else if (details.latestDailyTokens != null) {
+                const date = details.latestDailyDate ? ` (${details.latestDailyDate})` : '';
+                addLine(menu, `Latest day${date}`, formatTokens(details.latestDailyTokens), 'tokens'); count++;
+            }
+            if (details.lifetimeTokens != null) { addLine(menu, 'Lifetime', formatTokens(details.lifetimeTokens), 'tokens'); count++; }
+            if (showLimits) {
+                const formatWindow = window => {
+                    if (!window) return;
+                    const mins = window.windowDurationMins;
+                    const duration = mins >= 10080 ? '7d' : mins >= 1440 ? `${Math.round(mins / 1440)}d` : `${Math.round(mins / 60)}h`;
+                    const percent = Number(window.usedPercent);
+                    const level = Number.isFinite(percent) && percent >= 90 ? 'critical' : Number.isFinite(percent) && percent >= 70 ? 'warning' : 'healthy';
+                    const reset = formatReset(window);
+                    addLine(menu, duration, [{text: `${window.usedPercent}% used`, style_class: level}, {text: reset, style_class: 'reset'}]);
+                    count++;
+                };
+                formatWindow(details.primary); formatWindow(details.secondary);
+            }
+            if (!count) addLine(menu, 'Consumption', 'Unavailable', 'reset');
+        };
+        const providers = this._visibleProviders(snapshot);
+        for (const provider of providers) {
+            const state = provider.status || 'UNKNOWN';
+            const presentation = presentationFor(state);
+            const submenu = new PopupMenu.PopupSubMenuMenuItem(`${provider.name} · ${presentation.label}`, false);
+            submenu.actor.add_style_class_name('vox-sentry-provider-item');
+            const providerIcon = this._providerIcon();
+            providerIcon.add_style_class_name(`vox-sentry-provider-status-${presentation.statusClass}`);
+            submenu.actor.insert_child_at_index(providerIcon, 0);
+            submenu.menu.actor.add_style_class_name('vox-sentry-provider-menu');
+            submenu.label.add_style_class_name('vox-sentry-provider-label');
+            submenu.label.add_style_class_name(`vox-sentry-provider-status-${presentation.statusClass}`);
+            const providerSessions = allSessions
+                .filter(session => session.provider === provider.id)
+                .slice(0, showMultipleSessions ? undefined : 1);
+            if (providerSessions.length) {
+                for (const session of providerSessions) {
+                    const item = new PopupMenu.PopupMenuItem(`${session.projectName || 'Workspace'} · ${session.status.toLowerCase()}`);
+                    item.actor.reactive = false;
+                    submenu.menu.addMenuItem(item);
+                }
+            } else {
+                const item = new PopupMenu.PopupMenuItem('No active sessions');
+                item.actor.reactive = false;
+                submenu.menu.addMenuItem(item);
+            }
+            submenu.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+            const usage = snapshot.usage || {};
+            addUsage(submenu.menu, usage[provider.id]);
+            if (!usage[provider.id]) addLine(submenu.menu, 'Consumption', 'Unavailable', 'reset');
+            this._providers.addMenuItem(submenu);
+        }
+        if (!providers.length) {
+            const emptyLabel = this._settings.get_boolean('show-connected-only') !== false
+                ? 'No connected providers'
+                : 'No providers detected';
+            const item = new PopupMenu.PopupMenuItem(emptyLabel);
+            item.actor.reactive = false;
+            this._providers.addMenuItem(item);
+        }
+    }
+
+    _cleanup() {
+        if (this._refreshSource) {
+            GLib.Source.remove(this._refreshSource);
+            this._refreshSource = 0;
+        }
+        if (this._statusTestSource) {
+            GLib.Source.remove(this._statusTestSource);
+            this._statusTestSource = 0;
+        }
+        this._statusTest = null;
+        if (this._statusCancellable) this._statusCancellable.cancel();
+        this._statusCancellable = null;
+        if (this._refreshCancellable) this._refreshCancellable.cancel();
+        this._refreshCancellable = null;
+        if (this._proxy) {
+            for (const signalId of this._signalIds) this._proxy.disconnect(signalId);
+            this._signalIds = [];
+            this._proxy = null;
+        }
+        if (this._menuSignal) {
+            this.menu.disconnect(this._menuSignal);
+            this._menuSignal = 0;
+        }
+        if (this._settingsSignal) {
+            this._settings.disconnect(this._settingsSignal);
+            this._settingsSignal = 0;
+        }
+        this._notificationManager.destroy();
+        this._notificationManager = null;
+        this._settings = null;
+        this._openPreferencesCallback = null;
+        this._statusDot = null;
+        this._statusClass = null;
+        this._snapshotKey = null;
+        this._title = null;
+        this._statusDetail = null;
+        this._providers = null;
+        this._menuKey = null;
+        this._pendingReady.clear();
+        this._refresh = null;
+    }
+
+    destroy() {
+        this._cleanup();
+        super.destroy();
+    }
+
+});
+
+export default class VoxSentryExtension extends Extension {
+    enable() {
+        this._indicator = new AgentIndicator(this.getSettings(), () => this.openPreferences());
+        Main.panel.addToStatusArea(this.uuid, this._indicator);
+    }
+
+    disable() {
+        if (this._indicator) this._indicator.destroy();
+        this._indicator = null;
+    }
+}

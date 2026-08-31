@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vox-sentry-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test and inspect extension
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install GNOME validation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            gjs \
+            gnome-shell \
+            gir1.2-gst-plugins-base-1.0 \
+            gstreamer1.0-libav \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-ugly \
+            shellcheck \
+            unzip
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install project and QA tools
+        run: |
+          python -m venv .ci-venv
+          .ci-venv/bin/python -m pip install --upgrade pip
+          # shexli 0.2.1 currently crashes with tree-sitter 0.26.x.
+          .ci-venv/bin/python -m pip install --editable '.[dev]' ruff shexli==0.2.1 'tree-sitter<0.26'
+
+      - name: Run tests and static checks
+        run: |
+          .ci-venv/bin/python -m pytest -q
+          .ci-venv/bin/ruff check vox_sentry providers tests
+          .ci-venv/bin/python -m compileall -q vox_sentry providers tests
+          for file in gnome-extension/*.js; do node --check "$file"; done
+          gjs -m gnome-extension/soundManager.js
+          shellcheck install.sh pack-ego.sh scripts/validate-ego-package.sh
+
+      - name: Validate EGO package
+        run: |
+          output_dir="$RUNNER_TEMP/vox-sentry-ci"
+          ./pack-ego.sh "$output_dir"
+          package="$output_dir/vox-sentry@gnome-vox-sentry.shell-extension.zip"
+          .ci-venv/bin/shexli --format text "$package"
+          scripts/validate-ego-package.sh "$package"
+          unzip -t "$package"

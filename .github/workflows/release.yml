@@ -1,0 +1,129 @@
+name: Release GNOME extension
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing semantic-version tag to release, for example v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vox-sentry-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Validate and publish release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      RELEASE_UUID: vox-sentry@gnome-vox-sentry
+
+    steps:
+      - name: Check out the tagged source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Validate release tag and project version
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must use vMAJOR.MINOR.PATCH: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          version="${RELEASE_TAG#v}"
+          project_version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          if [[ "$version" != "$project_version" ]]; then
+            echo "Tag $RELEASE_TAG does not match pyproject.toml version $project_version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install GNOME and multimedia validation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            gjs \
+            gnome-shell \
+            gir1.2-gst-plugins-base-1.0 \
+            gstreamer1.0-libav \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-ugly \
+            jq \
+            libglib2.0-bin \
+            shellcheck \
+            unzip
+
+      - name: Set up an isolated Python environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install project and test tools
+        run: |
+          python -m venv .ci-venv
+          .ci-venv/bin/python -m pip install --upgrade pip
+          # shexli 0.2.1 currently crashes with tree-sitter 0.26.x.
+          .ci-venv/bin/python -m pip install --editable '.[dev]' ruff shexli==0.2.1 'tree-sitter<0.26'
+
+      - name: Run Python tests and static checks
+        run: |
+          .ci-venv/bin/python -m pytest -q
+          .ci-venv/bin/ruff check vox_sentry providers tests
+          .ci-venv/bin/python -m compileall -q vox_sentry providers tests
+
+      - name: Check extension JavaScript and scripts
+        run: |
+          for file in gnome-extension/*.js; do node --check "$file"; done
+          gjs -m gnome-extension/soundManager.js
+          shellcheck install.sh pack-ego.sh scripts/validate-ego-package.sh
+
+      - name: Build and validate EGO bundle
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/vox-sentry-release"
+          mkdir -p "$output_dir"
+          ./pack-ego.sh "$output_dir"
+          package="$output_dir/${RELEASE_UUID}.shell-extension.zip"
+          .ci-venv/bin/shexli --format text "$package"
+          scripts/validate-ego-package.sh "$package"
+          sha256sum "$package" > "$package.sha256"
+          echo "package=$package" >> "$GITHUB_OUTPUT"
+          echo "checksum=$package.sha256" >> "$GITHUB_OUTPUT"
+          echo "package_sha256=$(cut -d ' ' -f 1 "$package.sha256")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload release assets to the workflow run
+        uses: actions/upload-artifact@v4
+        with:
+          name: vox-sentry-${{ steps.release.outputs.version }}
+          if-no-files-found: error
+          path: |
+            ${{ steps.package.outputs.package }}
+            ${{ steps.package.outputs.checksum }}
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "${{ steps.package.outputs.package }}" \
+            "${{ steps.package.outputs.checksum }}" \
+            --verify-tag \
+            --title "Vox Sentry ${{ steps.release.outputs.version }}" \
+            --generate-notes
