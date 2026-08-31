@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-project_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+project_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 extension_dir="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-shell/extensions/vox-sentry@gnome-vox-sentry"
 systemd_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 runtime_dir="${XDG_DATA_HOME:-$HOME/.local/share}/gnome-vox-sentry"
