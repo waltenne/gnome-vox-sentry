@@ -1,5 +1,10 @@
 # Releasing Vox Sentry
 
+## Table of contents
+
+- [Release procedure](#release-procedure)
+- [Uploading to extensions.gnome.org](#uploading-to-extensionsgnomeorg)
+
 Releases are created from an annotated semantic-version tag. The GitHub Actions workflow at
 `.github/workflows/release.yml` runs the test suite, Python linting, JavaScript syntax checks,
 ShellCheck, GNOME tooling, the GNOME `shexli` static analyzer and the EGO package validator before

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+Changes not yet included in a tagged release.
+
+## 0.1.0 - 2026-08-31
+
 - Replaced the grouped red/amber/green indicator with one compact semantic status dot and a unique
   color class for every normalized state; provider labels and icons now use the same palette.
 - Added a shared status presentation map, a color preview for every state in Preferences and a
@@ -32,8 +36,6 @@
 - Simplified the GNOME 46 submission path by removing compatibility optional checks and moving
   GStreamer initialization into the runtime sound manager.
 - Relicensed the project under GNU GPL-2.0-or-later for GNOME Shell extension distribution.
-
-## 0.1.0 - 2026-08-30
 
 - Initial local-first Core, provider registry, session model and protocol v1.
 - Working process/metadata Codex provider with conservative capability reporting.
