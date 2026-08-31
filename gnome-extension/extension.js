@@ -11,6 +11,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {NotificationManager} from './notificationManager.js';
+import {presentationFor, statusClassFor} from './statusPresentation.js';
 
 const BUS = 'io.github.gnome_vox_sentry';
 const PATH = '/io/github/gnome_vox_sentry';
@@ -47,27 +48,21 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
         this._refreshSource = 0;
         this._statusCancellable = null;
         this._refreshCancellable = null;
+        this._statusTestSource = 0;
+        this._statusTest = null;
         this._notificationManager = new NotificationManager(settings);
-        this._lamps = {};
-        this._trafficLight = new St.BoxLayout({
-            style_class: 'vox-sentry-traffic-light',
+        this._statusDot = new St.DrawingArea({
+            style_class: 'vox-sentry-status-dot',
             x_expand: false,
             y_expand: false,
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.CENTER,
         });
-        for (const color of ['red', 'amber', 'green']) {
-            const lamp = new St.Widget({
-                style_class: `vox-sentry-lamp vox-sentry-lamp-${color}`,
-                x_expand: false,
-                y_expand: false,
-                x_align: Clutter.ActorAlign.CENTER,
-                y_align: Clutter.ActorAlign.CENTER,
-            });
-            this._trafficLight.add_child(lamp);
-            this._lamps[color] = lamp;
-        }
-        this.add_child(this._trafficLight);
+        this._statusDot.set_size(16, 16);
+        this._statusDot.connect('repaint', area => this._repaintStatusDot(area));
+        this._statusClass = null;
+        this._setStatusClass('UNKNOWN');
+        this.add_child(this._statusDot);
         this._title = new PopupMenu.PopupMenuItem('Vox Sentry');
         this._title.actor.reactive = false;
         this._title.actor.add_style_class_name('vox-sentry-status-item');
@@ -104,6 +99,7 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
             this._signalIds.push(this._proxy.connect('g-signal', (_proxy, _sender, signal, parameters) => {
                 if (signal === 'StatusChanged') this._load();
                 if (signal === 'NotificationTest') this._showTestNotification(parameters.deep_unpack()[0]);
+                if (signal === 'StatusTest') this._showStatusTest(parameters.deep_unpack()[0]);
             }));
             // The daemon may start after GNOME Shell has already enabled the
             // extension. Reload when its well-known D-Bus name appears.
@@ -186,45 +182,79 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
             eventType);
     }
 
+    _showStatusTest(status) {
+        const presentation = presentationFor(status);
+        if (this._statusTestSource) {
+            GLib.Source.remove(this._statusTestSource);
+            this._statusTestSource = 0;
+        }
+        this._statusTest = {status, label: presentation.indicatorLabel};
+        this._render(this._snapshot || {status: 'UNKNOWN', sessions: []}, true);
+        this._statusTestSource = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 5, () => {
+            this._statusTestSource = 0;
+            this._statusTest = null;
+            if (this._snapshot) this._render(this._snapshot, true);
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
     _render(snapshot, force = false) {
         const snapshotKey = JSON.stringify({...snapshot, generatedAt: undefined});
         if (!force && this._snapshotKey === snapshotKey) return;
         this._snapshot = snapshot;
         this._snapshotKey = snapshotKey;
-        if (!this._trafficLight || !this._title) return;
+        if (!this._statusDot || !this._title) return;
         const status = snapshot.status || 'UNKNOWN';
         const connectedProviders = this._connectedProviders(snapshot);
         const providerNames = connectedProviders
             .map(provider => provider.name);
         const subject = providerNames.length ? providerNames.join(', ') : 'Agent';
-        const presentation = {
-            WORKING: {light: 'amber', label: 'Working', detail: `${subject} is processing`},
-            THINKING: {light: 'amber', label: 'Thinking', detail: `${subject} is planning`},
-            IDLE: {light: 'green', label: 'Ready', detail: `${subject} is idle`},
-            COMPLETED: {light: 'green', label: 'Completed', detail: 'The last task finished'},
-            WAITING: {light: 'amber', label: 'Waiting', detail: `${subject} needs your input`},
-            UNKNOWN: {light: 'amber', label: 'Unknown', detail: 'Waiting for a status update'},
-            OFFLINE: {light: 'red', label: 'Offline', detail: 'The local monitor is unavailable'},
-            ERROR: {light: 'red', label: 'Error', detail: `${subject} reported an error`},
-            RATE_LIMITED: {light: 'red', label: 'Limit reached', detail: `${subject} usage is currently limited`},
-        }[status] || {light: 'amber', label: 'Unknown', detail: 'Waiting for a status update'};
-        this._setTrafficLight(presentation.light);
-        this._title.label.text = `Vox Sentry · ${presentation.label}`;
-        this._statusDetail.label.text = presentation.detail;
+        const actualPresentation = presentationFor(status);
+        const details = {
+            WORKING: `${subject} is processing`,
+            THINKING: `${subject} is planning`,
+            IDLE: `${subject} is idle`,
+            COMPLETED: 'The last task finished',
+            WAITING: `${subject} needs your input`,
+            UNKNOWN: 'Waiting for a status update',
+            OFFLINE: 'The local monitor is unavailable',
+            ERROR: `${subject} reported an error`,
+            RATE_LIMITED: `${subject} usage is currently limited`,
+        };
+        this._setStatusClass(this._statusTest ? this._statusTest.status : status);
+        this._title.label.text = this._statusTest
+            ? `Vox Sentry · Color test · ${this._statusTest.label}`
+            : `Vox Sentry · ${actualPresentation.indicatorLabel}`;
+        this._statusDetail.label.text = this._statusTest
+            ? 'Temporary preview — restoring real status in 5 seconds'
+            : details[status] || details.UNKNOWN;
         this._notifyProviderTransitions(connectedProviders, snapshot);
         if (this.menu.isOpen) return;
         this._renderMenu(snapshot);
     }
 
-    _setTrafficLight(activeColor) {
-        for (const [color, lamp] of Object.entries(this._lamps)) {
-            lamp.remove_style_class_name('active');
-            lamp.remove_style_class_name(`vox-sentry-lamp-${color}-active`);
-            if (color === activeColor) {
-                lamp.add_style_class_name('active');
-                lamp.add_style_class_name(`vox-sentry-lamp-${color}-active`);
-            }
-        }
+    _setStatusClass(status) {
+        const nextClass = statusClassFor(status);
+        if (this._statusClass === nextClass || !this._statusDot) return;
+        if (this._statusClass) this._statusDot.remove_style_class_name(this._statusClass);
+        this._statusDot.add_style_class_name(nextClass);
+        this._statusClass = nextClass;
+        this._statusDot.queue_repaint();
+    }
+
+    _repaintStatusDot(area) {
+        const context = area.get_context();
+        const themeColor = area.get_theme_node().get_foreground_color();
+        const width = area.get_width();
+        const height = area.get_height();
+        const radius = Math.min(width, height) / 2;
+        context.setSourceRGBA(
+            themeColor.red / 255,
+            themeColor.green / 255,
+            themeColor.blue / 255,
+            themeColor.alpha / 255);
+        context.arc(width / 2, height / 2, radius, 0, 2 * Math.PI);
+        context.fill();
     }
 
     _connectedProviders(snapshot) {
@@ -328,11 +358,6 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
         const showMultipleSessions = this._settings.get_boolean('show-multiple-sessions') !== false;
         const showUsage = this._settings.get_boolean('show-usage') !== false;
         const showLimits = this._settings.get_boolean('show-limits') !== false;
-        const statusPresentation = {
-            WORKING: ['Working', 'amber'], THINKING: ['Thinking', 'amber'], WAITING: ['Waiting', 'amber'],
-            IDLE: ['Idle', 'green'], COMPLETED: ['Completed', 'green'], OFFLINE: ['Offline', 'red'],
-            ERROR: ['Error', 'red'], RATE_LIMITED: ['Limit reached', 'red'], UNKNOWN: ['Unknown', 'amber'],
-        };
         const addLine = (menu, label, value, valueClass = 'info') => {
             const item = new PopupMenu.PopupBaseMenuItem({reactive: false, style_class: 'vox-sentry-usage-item'});
             item.add_child(new St.Label({text: `${label}:`, style_class: 'vox-sentry-usage-label'}));
@@ -370,14 +395,16 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
         };
         const providers = this._visibleProviders(snapshot);
         for (const provider of providers) {
-            const state = statusPresentation[provider.status] ? provider.status : 'UNKNOWN';
-            const [label, color] = statusPresentation[state];
-            const submenu = new PopupMenu.PopupSubMenuMenuItem(`${provider.name} · ${label}`, false);
+            const state = provider.status || 'UNKNOWN';
+            const presentation = presentationFor(state);
+            const submenu = new PopupMenu.PopupSubMenuMenuItem(`${provider.name} · ${presentation.label}`, false);
             submenu.actor.add_style_class_name('vox-sentry-provider-item');
-            submenu.actor.insert_child_at_index(this._providerIcon(), 0);
+            const providerIcon = this._providerIcon();
+            providerIcon.add_style_class_name(`vox-sentry-provider-status-${presentation.statusClass}`);
+            submenu.actor.insert_child_at_index(providerIcon, 0);
             submenu.menu.actor.add_style_class_name('vox-sentry-provider-menu');
             submenu.label.add_style_class_name('vox-sentry-provider-label');
-            submenu.label.add_style_class_name(`vox-sentry-provider-status-${color}`);
+            submenu.label.add_style_class_name(`vox-sentry-provider-status-${presentation.statusClass}`);
             const providerSessions = allSessions
                 .filter(session => session.provider === provider.id)
                 .slice(0, showMultipleSessions ? undefined : 1);
@@ -413,6 +440,11 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
             GLib.Source.remove(this._refreshSource);
             this._refreshSource = 0;
         }
+        if (this._statusTestSource) {
+            GLib.Source.remove(this._statusTestSource);
+            this._statusTestSource = 0;
+        }
+        this._statusTest = null;
         if (this._statusCancellable) this._statusCancellable.cancel();
         this._statusCancellable = null;
         if (this._refreshCancellable) this._refreshCancellable.cancel();
@@ -434,7 +466,8 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
         this._notificationManager = null;
         this._settings = null;
         this._openPreferencesCallback = null;
-        this._trafficLight = null;
+        this._statusDot = null;
+        this._statusClass = null;
         this._snapshotKey = null;
         this._title = null;
         this._statusDetail = null;

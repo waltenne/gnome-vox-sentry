@@ -24,8 +24,10 @@ INTROSPECTION = f'''<node><interface name="{INTERFACE}">
 <method name="GetUsage"><arg direction="out" type="s"/></method>
 <method name="Reload"><arg direction="out" type="s"/></method>
 <method name="TestNotification"><arg direction="in" type="s"/><arg direction="out" type="s"/></method>
+<method name="TestStatus"><arg direction="in" type="s"/><arg direction="out" type="s"/></method>
 <signal name="StatusChanged"><arg type="s"/></signal>
 <signal name="NotificationTest"><arg type="s"/></signal>
+<signal name="StatusTest"><arg type="s"/></signal>
 <signal name="SessionStarted"><arg type="s"/></signal><signal name="SessionChanged"><arg type="s"/></signal>
 <signal name="SessionEnded"><arg type="s"/></signal><signal name="UsageChanged"><arg type="s"/></signal>
 <signal name="ProviderDetected"><arg type="s"/></signal><signal name="ProviderUnavailable"><arg type="s"/></signal>
@@ -76,6 +78,14 @@ class DbusService:
                     return
                 self._signal("NotificationTest", event_type)
                 invocation.return_value(self.GLib.Variant("(s)", (event_type,)))
+                return
+            if method == "TestStatus":
+                status = _params.unpack()[0].upper()
+                if status not in {item.value for item in AgentStatus}:
+                    invocation.return_dbus_error(f"{INTERFACE}.Error", "Unknown status")
+                    return
+                self._signal("StatusTest", status)
+                invocation.return_value(self.GLib.Variant("(s)", (status,)))
                 return
             snapshot = self.core.reload() if method == "Reload" else self.core.get_status()
             if method == "Reload": self._schedule_tick(self._next_interval(snapshot))

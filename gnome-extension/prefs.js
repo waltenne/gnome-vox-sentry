@@ -15,6 +15,7 @@ import {
     SUPPORTED_NOTIFICATION_SOUND_MIME_TYPES,
     validateSoundFile,
 } from './soundManager.js';
+import {STATUS_ORDER, presentationFor} from './statusPresentation.js';
 
 const BUS = 'io.github.gnome_vox_sentry';
 const PATH = '/io/github/gnome_vox_sentry';
@@ -33,24 +34,17 @@ const PROVIDERS = [
     ['opencode', 'OpenCode'],
 ];
 
-const STATUS_PRESENTATION = {
-    WORKING: ['Working', 'warning'],
-    THINKING: ['Thinking', 'warning'],
-    WAITING: ['Waiting', 'warning'],
-    IDLE: ['Idle', 'success'],
-    COMPLETED: ['Completed', 'success'],
-    ERROR: ['Error', 'error'],
-    RATE_LIMITED: ['Limit reached', 'error'],
-    UNKNOWN: ['Unknown', 'warning'],
-    OFFLINE: ['Offline', 'dim-label'],
-};
-
 const TEST_EVENTS = [
     ['WAITING', 'Waiting'],
     ['COMPLETED', 'Completed'],
     ['ERROR', 'Error'],
     ['RATE_LIMITED', 'Rate limited'],
 ];
+
+const STATUS_TESTS = STATUS_ORDER.map(status => {
+    const presentation = presentationFor(status);
+    return [status, presentation.label, presentation.colorName, presentation.color];
+});
 
 export default class VoxSentryPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
@@ -63,25 +57,13 @@ export default class VoxSentryPreferences extends ExtensionPreferences {
         this._statusSource = 0;
 
         window.set_title('Vox Sentry Settings');
-        window.set_default_size(760, 620);
-        const stack = new Adw.ViewStack({vexpand: true});
-        const switcher = new Adw.ViewSwitcher({
-            stack,
-            policy: Adw.ViewSwitcherPolicy.WIDE,
-            halign: Gtk.Align.CENTER,
-        });
-        const header = new Adw.HeaderBar();
-        header.set_title_widget(switcher);
-        const content = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL});
-        content.append(header);
-        content.append(stack);
-        window.set_content(content);
-
-        stack.add_titled_with_icon(this._behaviorPage(), 'behavior', 'Behavior', 'preferences-system-symbolic');
-        stack.add_titled_with_icon(this._notificationsPage(), 'notifications', 'Notifications', 'preferences-desktop-notification-symbolic');
-        stack.add_titled_with_icon(this._providersPage(), 'providers', 'Providers', 'applications-system-symbolic');
-        stack.add_titled_with_icon(this._usagePage(), 'usage', 'Usage', 'utilities-system-monitor-symbolic');
-        stack.add_titled_with_icon(this._monitoringPage(), 'monitoring', 'Monitoring', 'view-refresh-symbolic');
+        window.set_default_size(920, 700);
+        window.set_search_enabled(true);
+        this._addPage(window, this._behaviorPage(), 'general', 'General', 'preferences-system-symbolic');
+        this._addPage(window, this._providersPage(), 'providers', 'Providers', 'applications-system-symbolic');
+        this._addPage(window, this._notificationsPage(), 'notifications', 'Notifications', 'preferences-desktop-notification-symbolic');
+        this._addPage(window, this._soundsPage(), 'sounds', 'Sounds', 'audio-x-generic-symbolic');
+        this._addPage(window, this._aboutPage(), 'about', 'About', 'help-about-symbolic');
 
         try {
             this._proxy = Gio.DBusProxy.new_for_bus_sync(
@@ -121,6 +103,13 @@ export default class VoxSentryPreferences extends ExtensionPreferences {
         });
     }
 
+    _addPage(window, page, name, title, iconName) {
+        page.set_name(name);
+        page.set_title(title);
+        page.set_icon_name(iconName);
+        window.add(page);
+    }
+
     _behaviorPage() {
         const page = new Adw.PreferencesPage();
         const group = new Adw.PreferencesGroup({
@@ -139,7 +128,100 @@ export default class VoxSentryPreferences extends ExtensionPreferences {
         this._addSwitch(group, 'show-multiple-sessions', 'Show multiple sessions', 'Show every live workspace session under each provider.');
         this._addSwitch(group, 'notifications-enabled', 'Desktop notifications', 'Notify when a provider finishes, needs input, fails or reaches a quota limit.');
         page.add(group);
+
+        const colors = new Adw.PreferencesGroup({
+            title: 'Status color test',
+            description: 'Preview each indicator color and optionally show it in the panel for five seconds.',
+        });
+        const statusRow = new Adw.ActionRow({
+            title: 'Status to test',
+            subtitle: 'Choose a state to preview.',
+        });
+        const status = new Gtk.DropDown({
+            model: Gtk.StringList.new(STATUS_TESTS.map(([, label]) => label)),
+        });
+        status.set_size_request(180, -1);
+        status.set_factory(this._statusOptionFactory());
+        status.set_list_factory(this._statusOptionFactory());
+        statusRow.add_suffix(status);
+        const previewRow = new Adw.ActionRow({title: 'Preview', subtitle: 'The selected status color is shown here.'});
+        const dot = new Gtk.Label({label: '●', valign: Gtk.Align.CENTER});
+        dot.add_css_class('vox-sentry-status-preview-dot');
+        previewRow.add_prefix(dot);
+        colors.add(statusRow);
+        colors.add(previewRow);
+
+        const panelRow = new Adw.ActionRow({
+            title: 'Test indicator color',
+            subtitle: 'Temporarily changes the status dot in the GNOME panel.',
+        });
+        const panelButton = new Gtk.Button({label: 'Test', valign: Gtk.Align.CENTER});
+        panelButton.add_css_class('suggested-action');
+        panelButton.connect('clicked', () => this._sendStatusTest(STATUS_TESTS[status.selected][0]));
+        panelRow.add_suffix(panelButton);
+        colors.add(panelRow);
+        status.connect('notify::selected', () => this._updateStatusPreview(status, dot, previewRow));
+        this._updateStatusPreview(status, dot, previewRow);
+        page.add(colors);
+
+        const usage = new Adw.PreferencesGroup({
+            title: 'Usage and limits',
+            description: 'Choose which consumption details appear when a provider exposes them.',
+        });
+        this._addSwitch(usage, 'show-usage', 'Show token usage', 'Show aggregate token totals in the provider dropdown.');
+        this._addSwitch(usage, 'show-limits', 'Show limits and reset times', 'Show quota windows and their reset times.');
+        page.add(usage);
+
+        const monitoring = new Adw.PreferencesGroup({
+            title: 'Monitoring',
+            description: 'Control how often the daemon checks provider state in the background.',
+        });
+        const interval = new Adw.SpinRow({
+            title: 'Refresh interval',
+            subtitle: 'Seconds between automatic provider checks.',
+            adjustment: new Gtk.Adjustment({lower: 1, upper: 60, step_increment: 1, value: this._settings.get_int('refresh-interval')}),
+        });
+        interval.connect('notify::value', () => this._settings.set_int('refresh-interval', interval.value));
+        monitoring.add(interval);
+        page.add(monitoring);
         return page;
+    }
+
+    _updateStatusPreview(status, dot, row) {
+        const [, label, color, hex] = STATUS_TESTS[status.selected] || STATUS_TESTS[0];
+        dot.set_markup(`<span foreground="${hex}">●</span>`);
+        row.title = label;
+        row.subtitle = `${label} · ${color} indicator light`;
+    }
+
+    _statusOptionFactory() {
+        const factory = new Gtk.SignalListItemFactory();
+        factory.connect('setup', (_factory, item) => {
+            item.set_child(new Gtk.Label({halign: Gtk.Align.START}));
+        });
+        factory.connect('bind', (_factory, item) => {
+            const option = STATUS_TESTS[item.get_position()] || STATUS_TESTS[0];
+            const [, label, , hex] = option;
+            item.get_child().set_markup(`<span foreground="${hex}">●  ${label}</span>`);
+        });
+        return factory;
+    }
+
+    _sendStatusTest(status) {
+        if (!this._proxy) {
+            this._showTestError(new Error('The Vox Sentry daemon is not available.'));
+            return;
+        }
+        try {
+            this._proxy.call_sync(
+                'TestStatus',
+                new GLib.Variant('(s)', [status]),
+                Gio.DBusCallFlags.NONE,
+                3000,
+                null);
+        } catch (error) {
+            this._showTestError(error);
+        }
     }
 
     _providersPage() {
@@ -181,18 +263,6 @@ export default class VoxSentryPreferences extends ExtensionPreferences {
         this._addSwitch(behavior, 'sounds-enabled', 'Notification sounds', 'Play a sound for waiting, completed, error and rate-limit events.');
         page.add(behavior);
 
-        const sounds = new Adw.PreferencesGroup({
-            title: 'Custom event sounds',
-            description: 'Select a validated local file for an event. Empty selections use the system sound.',
-        });
-        for (const [key, title] of [
-            ['sound-waiting', 'Waiting'],
-            ['sound-completed', 'Completed'],
-            ['sound-error', 'Error'],
-            ['sound-rate-limited', 'Rate limited'],
-        ]) sounds.add(this._soundRow(key, title));
-        page.add(sounds);
-
         const test = new Adw.PreferencesGroup({
             title: 'Test notifications',
             description: 'Send a real GNOME notification using the selected event and its current sound configuration.',
@@ -215,11 +285,49 @@ export default class VoxSentryPreferences extends ExtensionPreferences {
         test.add(sendRow);
         page.add(test);
 
+        return page;
+    }
+
+    _soundsPage() {
+        const page = new Adw.PreferencesPage();
+        const sounds = new Adw.PreferencesGroup({
+            title: 'Custom event sounds',
+            description: 'Select a validated local file for an event. Empty selections use the system sound.',
+        });
+        for (const [key, title] of [
+            ['sound-waiting', 'Waiting'],
+            ['sound-completed', 'Completed'],
+            ['sound-error', 'Error'],
+            ['sound-rate-limited', 'Rate limited'],
+        ]) sounds.add(this._soundRow(key, title));
+        page.add(sounds);
+
         const requirements = new Adw.PreferencesGroup({title: 'Audio file requirements'});
         requirements.add(new Adw.ActionRow({title: 'Supported formats', subtitle: 'MP3, OGG, OGA, WAV and FLAC'}));
         requirements.add(new Adw.ActionRow({title: 'Maximum duration', subtitle: `${MAX_NOTIFICATION_SOUND_DURATION} seconds` }));
         requirements.add(new Adw.ActionRow({title: 'Maximum size', subtitle: `${MAX_NOTIFICATION_SOUND_SIZE / (1024 * 1024)} MB` }));
         page.add(requirements);
+        return page;
+    }
+
+    _aboutPage() {
+        const page = new Adw.PreferencesPage();
+        const about = new Adw.PreferencesGroup({
+            title: 'Vox Sentry',
+            description: 'A local-first GNOME monitor for coding-agent activity.',
+        });
+        about.add(new Adw.ActionRow({title: 'Version', subtitle: '0.1.0'}));
+        about.add(new Adw.ActionRow({title: 'GNOME Shell', subtitle: '46'}));
+        about.add(new Adw.ActionRow({title: 'Privacy', subtitle: 'All provider discovery and status processing stay on this machine.'}));
+        const repository = new Adw.ActionRow({title: 'Repository', subtitle: 'Source code, issues and contributions'});
+        const link = new Gtk.LinkButton({uri: 'https://github.com/waltenne/gnome-vox-sentry', label: 'Open'});
+        repository.add_suffix(link);
+        about.add(repository);
+        page.add(about);
+
+        const license = new Adw.PreferencesGroup({title: 'License'});
+        license.add(new Adw.ActionRow({title: 'GNU GPL-2.0-or-later', subtitle: 'Compatible with GNOME Shell extension distribution.'}));
+        page.add(license);
         return page;
     }
 
@@ -329,35 +437,6 @@ export default class VoxSentryPreferences extends ExtensionPreferences {
         dialog.present(this._window);
     }
 
-    _usagePage() {
-        const page = new Adw.PreferencesPage();
-        const group = new Adw.PreferencesGroup({
-            title: 'Usage and limits',
-            description: 'Choose which consumption details appear when a provider exposes them.',
-        });
-        this._addSwitch(group, 'show-usage', 'Show token usage', 'Show aggregate token totals in the provider dropdown.');
-        this._addSwitch(group, 'show-limits', 'Show limits and reset times', 'Show quota windows and their reset times.');
-        page.add(group);
-        return page;
-    }
-
-    _monitoringPage() {
-        const page = new Adw.PreferencesPage();
-        const group = new Adw.PreferencesGroup({
-            title: 'Monitoring',
-            description: 'The daemon refreshes provider state in the background. The indicator also offers a manual refresh.',
-        });
-        const interval = new Adw.SpinRow({
-            title: 'Refresh interval',
-            subtitle: 'Seconds between automatic provider checks.',
-            adjustment: new Gtk.Adjustment({lower: 1, upper: 60, step_increment: 1, value: this._settings.get_int('refresh-interval')}),
-        });
-        interval.connect('notify::value', () => this._settings.set_int('refresh-interval', interval.value));
-        group.add(interval);
-        page.add(group);
-        return page;
-    }
-
     _addSwitch(group, key, title, subtitle) {
         const row = new Adw.SwitchRow({title, subtitle, active: this._settings.get_boolean(key)});
         row.connect('notify::active', () => this._settings.set_boolean(key, row.active));
@@ -389,11 +468,8 @@ export default class VoxSentryPreferences extends ExtensionPreferences {
         for (const [id, elements] of this._providerRows) {
             const provider = providers[id];
             const state = provider ? provider.status || 'OFFLINE' : 'OFFLINE';
-            const [label, style] = STATUS_PRESENTATION[state] || STATUS_PRESENTATION.UNKNOWN;
-            elements.status.label = `● ${label}`;
-            for (const cssClass of ['success', 'warning', 'error', 'dim-label'])
-                elements.status.remove_css_class(cssClass);
-            elements.status.add_css_class(style);
+            const presentation = presentationFor(state);
+            elements.status.set_markup(`<span foreground="${presentation.color}">● ${presentation.label}</span>`);
             const connection = state === 'OFFLINE' ? 'Not connected' : 'Connected';
             const version = provider && provider.version ? ` · ${provider.version}` : '';
             elements.row.subtitle = `${connection}${version}`;
@@ -402,10 +478,8 @@ export default class VoxSentryPreferences extends ExtensionPreferences {
 
     _setUnavailable() {
         for (const [, elements] of this._providerRows) {
-            elements.status.label = '● Unavailable';
-            for (const cssClass of ['success', 'warning', 'error'])
-                elements.status.remove_css_class(cssClass);
-            elements.status.add_css_class('dim-label');
+            const presentation = presentationFor('OFFLINE');
+            elements.status.set_markup(`<span foreground="${presentation.color}">● Unavailable</span>`);
             elements.row.subtitle = 'Daemon is not available';
         }
     }

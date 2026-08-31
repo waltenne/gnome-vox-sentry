@@ -10,5 +10,6 @@ gnome-extensions pack \
     --out-dir "$output_dir" \
     --extra-source=notificationManager.js \
     --extra-source=soundManager.js \
+    --extra-source=statusPresentation.js \
     --extra-source="$project_dir/LICENSE" \
     "$project_dir/gnome-extension"

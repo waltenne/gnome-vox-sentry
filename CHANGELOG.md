@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Replaced the grouped red/amber/green indicator with one compact semantic status dot and a unique
+  color class for every normalized state; provider labels and icons now use the same palette.
+- Added a shared status presentation map, a color preview for every state in Preferences and a
+  five-second panel status test with automatic restoration.
 - Added official MP3 notification sound support alongside OGG, OGA, WAV and FLAC.
 - Added content/MIME/header/integrity/decoder validation with shared 10-second and 5 MB limits.
 - Added custom sound preview, per-event sounds, system fallback and explicit MP3 codec diagnostics.

@@ -1,12 +1,13 @@
 # Configuration
 
-The GNOME preferences window is divided into five tabs:
+The GNOME preferences window uses a native Adwaita sidebar with five categories:
 
-- **Behavior**: provider mode, connected-provider filtering and session display.
-- **Notifications**: desktop notifications, sounds and custom event audio.
+- **General**: provider mode, connected-provider filtering, session display, usage, limits, status
+  color testing and automatic refresh interval.
 - **Providers**: every supported provider with its live connection and status.
-- **Usage**: token totals, quota windows and reset times.
-- **Monitoring**: automatic refresh interval.
+- **Notifications**: desktop notifications and notification simulation.
+- **Sounds**: custom event audio, preview and format requirements.
+- **About**: version, GNOME compatibility, privacy, repository and license.
 
 The **Show only connected providers** option is enabled by default. Disable it to keep offline
 providers visible in the indicator and compare their status. The Providers tab always lists all
@@ -16,16 +17,31 @@ providers, including offline ones, so detection can be diagnosed without changin
 
 | Tab | Configuration | Default |
 | --- | --- | --- |
-| Behavior | Provider mode (`Auto`, `Manual` or `Multi`), connected-only providers and multiple sessions | Auto, connected-only on, multiple sessions on |
-| Notifications | Desktop notifications, sound playback, event sounds and notification simulation | Notifications and sounds on; all events on |
+| General | Provider mode, connected-only providers, multiple sessions, usage, limits, color test and refresh interval | Auto, connected-only on, multiple sessions on, usage/limits on, 2 seconds |
 | Providers | Live connection, detected version and current status for every supported provider | Read-only diagnostics |
-| Usage | Token totals, quota windows and reset times in provider dropdowns | Usage and limits on |
-| Monitoring | Automatic status refresh interval | 2 seconds |
+| Notifications | Desktop notifications and notification simulation | Notifications on |
+| Sounds | Sound playback, event sounds, preview and validated audio formats | Sounds on; system fallback |
+| About | Version, compatibility, privacy, repository and license | Informational |
 
 The Preferences window is opened from the indicator's **Settings** item. It uses GSettings with the
 schema `org.gnome.shell.extensions.vox-sentry`. The daemon uses a separate JSON configuration file
 at `$XDG_CONFIG_HOME/gnome-vox-sentry/config.json`, so provider enablement and daemon scheduling do
 not depend on the Preferences process.
+
+## Configuration screenshots
+
+The following captures document the current GNOME dark-theme layout and the controls available in
+each section:
+
+![General settings](assets/settings-general-full.png)
+
+![General settings compact view](assets/settings-general.png)
+
+![Provider status settings](assets/settings-providers.png)
+
+![Notification settings](assets/settings-notifications.png)
+
+![Sound settings](assets/settings-sounds.png)
 
 ## Runtime configuration
 
@@ -50,7 +66,7 @@ otherwise the UI keeps the provider status but displays `Consumption: Unavailabl
 
 ## Notification sound settings
 
-The Notifications tab provides independent custom sounds for Waiting, Completed, Error and Rate
+The Sounds tab provides independent custom sounds for Waiting, Completed, Error and Rate
 limited events. An empty selection uses the system sound.
 
 Supported formats:

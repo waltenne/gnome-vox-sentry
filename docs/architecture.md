@@ -18,7 +18,7 @@ has no Codex knowledge: it consumes `GetStatus` and `StatusChanged`.
    models and aggregates the provider state.
 3. `vox-sentryd` performs adaptive refreshes, keeps provider failures isolated and exposes the latest
    snapshot over the user session D-Bus.
-4. The GNOME extension renders the snapshot as status lights and expandable provider dropdowns. It
+4. The GNOME extension renders the snapshot as one semantic status dot and expandable provider dropdowns. It
    polls with cancellable calls and listens for status signals.
 5. Normalized transition events reach `NotificationManager`; selected sounds are validated and sent
    to `SoundManager`/GStreamer for playback.

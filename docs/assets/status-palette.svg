@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-labelledby="title desc">
+  <title id="title">Vox Sentry semantic status palette</title>
+  <desc id="desc">Nine status dots for Offline, Idle, Thinking, Working, Waiting, Completed, Error, Rate Limited and Unknown.</desc>
+  <rect width="1200" height="300" rx="24" fill="#101214"/>
+  <text x="48" y="58" fill="#f4f4f4" font-family="sans-serif" font-size="30" font-weight="700">Vox Sentry · Status Indicator</text>
+  <text x="48" y="92" fill="#a6aab1" font-family="sans-serif" font-size="17">One compact dot · one semantic color per normalized state</text>
+  <g font-family="sans-serif" font-size="15" text-anchor="middle">
+    <circle cx="100" cy="165" r="22" fill="#7a7a7a"/><text x="100" y="215" fill="#deddda">Offline</text>
+    <circle cx="225" cy="165" r="22" fill="#2fb344"/><text x="225" y="215" fill="#deddda">Idle</text>
+    <circle cx="350" cy="165" r="22" fill="#a855f7"/><text x="350" y="215" fill="#deddda">Thinking</text>
+    <circle cx="475" cy="165" r="22" fill="#3b82f6"/><text x="475" y="215" fill="#deddda">Working</text>
+    <circle cx="600" cy="165" r="22" fill="#facc15"/><text x="600" y="215" fill="#deddda">Waiting</text>
+    <circle cx="725" cy="165" r="22" fill="#22c55e"/><text x="725" y="215" fill="#deddda">Completed</text>
+    <circle cx="850" cy="165" r="22" fill="#ef4444"/><text x="850" y="215" fill="#deddda">Error</text>
+    <circle cx="975" cy="165" r="22" fill="#f97316"/><text x="975" y="215" fill="#deddda">Rate limited</text>
+    <circle cx="1100" cy="165" r="22" fill="#94a3b8"/><text x="1100" y="215" fill="#deddda">Unknown</text>
+  </g>
+  <text x="48" y="265" fill="#7f8792" font-family="sans-serif" font-size="14">Labels and popup text remain available for accessibility.</text>
+</svg>

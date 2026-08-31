@@ -1,5 +1,9 @@
 # gnome-vox-sentry
 
+![Vox Sentry semantic status palette](docs/assets/status-palette.svg)
+
+![Animated status demonstration](docs/assets/status-demo.gif)
+
 Project repository: https://github.com/waltenne/gnome-vox-sentry
 
 Vox Sentry is a local-first, privacy-first sentry for coding agents running on Linux/GNOME. It
@@ -8,6 +12,75 @@ Antigravity, Copilot, Claude and OpenCode are supported providers; the Core, pro
 GNOME client are provider-neutral.
 
 The project is distributed under the GNU GPL-2.0-or-later; see [LICENSE](LICENSE).
+
+## Overview
+
+Vox Sentry keeps the signal in the GNOME top panel minimal: one centered dot identifies the
+aggregated state, while the popup provides provider names, session details, usage and reset times.
+The dot changes directly with the normalized state; it does not use a three-color traffic-light
+grouping. The complete color sequence is available in the [status palette](docs/assets/status-palette.svg)
+and the animated [status demo](docs/assets/status-demo.gif).
+
+The demo is generated locally with `scripts/generate-status-demo.sh` when ImageMagick is available.
+It is intentionally provider-neutral: actual provider state continues to be detected by the daemon
+and normalized before the GNOME extension renders it.
+
+## Status indicator
+
+The indicator uses one circular dot and preserves a text label in the popup, so color is never the
+only way to identify a state:
+
+| Normalized state | Color | Meaning |
+| --- | --- | --- |
+| `OFFLINE` | Gray | Provider or local monitor unavailable |
+| `IDLE` | Green | Provider is ready |
+| `THINKING` | Purple | Provider is planning |
+| `WORKING` | Blue | Provider is processing |
+| `WAITING` | Yellow | Provider needs input |
+| `COMPLETED` | Bright green | Last task completed |
+| `ERROR` | Red | Provider reported an error |
+| `RATE_LIMITED` | Orange | Usage limit was reached |
+| `UNKNOWN` | Blue-gray | State could not be determined |
+
+## Screenshots
+
+These screenshots show the development build running with the GNOME dark theme. The configuration
+window uses the native Adwaita layout, while the panel captures show the compact indicator and its
+provider/usage popup.
+
+<details open>
+<summary>Configuration window</summary>
+
+### General
+
+![General settings](docs/assets/settings-general-full.png)
+
+![General settings compact view](docs/assets/settings-general.png)
+
+### Providers
+
+![Provider status settings](docs/assets/settings-providers.png)
+
+### Notifications
+
+![Notification settings](docs/assets/settings-notifications.png)
+
+### Sounds
+
+![Sound settings](docs/assets/settings-sounds.png)
+
+</details>
+
+<details open>
+<summary>Running indicator</summary>
+
+![Vox Sentry ready indicator](docs/assets/indicator-ready.png)
+
+![Vox Sentry provider and usage popup](docs/assets/indicator-popup-usage.png)
+
+</details>
+
+![Configuration and indicator overview](docs/assets/configuration-and-indicator-overview.png)
 
 ## Status
 
@@ -30,8 +103,8 @@ providers without a stable usage source are shown as unavailable.
 - **Usage and limits** — Authenticated Codex app-server usage plus Antigravity's structured
   `agy /usage` output, including 5-hour/weekly windows, percentages and reset timestamps. Usage
   is cached and omitted when the provider cannot verify it.
-- **GNOME interface** — System-theme-aware panel indicator, centered status lights, provider icons,
-  colored states, expandable provider dropdowns, connected-provider filtering and an in-extension
+- **GNOME interface** — System-theme-aware compact status dot, provider icons, semantic per-status
+  colors, expandable provider dropdowns, connected-provider filtering and an in-extension
   Preferences window organized by configuration tabs.
 - **Notifications and audio** — Provider-specific status notifications with transition
   debouncing, desktop notification settings, per-event sounds, preview/testing and system
@@ -184,15 +257,15 @@ Configuration is JSON at `$XDG_CONFIG_HOME/gnome-vox-sentry/config.json` (normal
 `$XDG_DATA_HOME` and `$XDG_CACHE_HOME`. The default is `providerMode: auto`; `manual` and `multi`
 are supported.
 
-The GNOME Preferences window is divided into five categories:
+The GNOME Preferences window uses a native Adwaita sidebar with five categories:
 
 | Category | Settings |
 | --- | --- |
-| Behavior | Provider mode, connected-provider filtering and session display |
-| Notifications | Desktop notifications, sounds, per-event audio and test/preview |
-| Providers | Connection, detected version and live status for every supported provider |
-| Usage | Token usage, quota limits and reset times when available |
-| Monitoring | Automatic refresh interval from 1 to 60 seconds |
+| General | Provider mode, session display, usage, limits, status color test and refresh interval |
+| Providers | Live connection, detected version and status diagnostics for every provider |
+| Notifications | Desktop notifications and notification simulation |
+| Sounds | Per-event audio, preview and validated format requirements |
+| About | Version, GNOME compatibility, privacy, repository and license |
 
 The main configuration keys are `providerMode`, `providers.<id>.enabled`,
 `monitoring.refreshInterval`, `notifications.enabled`, `notifications.events` and the GNOME
