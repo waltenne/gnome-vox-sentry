@@ -13,6 +13,28 @@ GNOME client are provider-neutral.
 
 The project is distributed under the GNU GPL-2.0-or-later; see [LICENSE](LICENSE).
 
+## Table of contents
+
+- [Overview](#overview)
+- [Status indicator](#status-indicator)
+- [Screenshots](#screenshots)
+- [Current status and roadmap](#status)
+- [Runtime flow](#runtime-flow)
+- [GNOME compatibility](#gnome-compatibility)
+- [Installation and quick start](#installation-and-quick-start)
+- [GitHub and EGO release flow](#github-and-ego-publication-flow)
+- [Configuration](#configuration)
+- [Notifications and audio](docs/notifications.md)
+- [Architecture and protocol](docs/architecture.md)
+- [Providers](docs/providers.md)
+- [Development and testing](docs/development.md)
+- [Performance](docs/performance.md)
+- [Release guide](docs/releasing.md)
+- [Privacy and security](#privacy-and-security)
+- [License](LICENSE)
+
+For the complete documentation map, see [docs/README.md](docs/README.md).
+
 ## Overview
 
 Vox Sentry keeps the signal in the GNOME top panel minimal: one centered dot identifies the
@@ -80,7 +102,6 @@ provider/usage popup.
 
 </details>
 
-![Configuration and indicator overview](docs/assets/configuration-and-indicator-overview.png)
 
 ## Status
 
@@ -181,7 +202,7 @@ docs/                    architecture, protocol and contributor guides
 systemd/                 user service
 ```
 
-## Quick start
+## Installation and quick start
 
 ```bash
 python3 -m venv --system-site-packages .venv
@@ -297,6 +318,19 @@ notification sound settings. Custom sounds officially support MP3, OGG, OGA, WAV
 format uses the same maximum duration of 10 seconds and maximum size of 5 MB. Files are checked by
 MIME type, magic bytes, integrity, duration and actual decoder availability; the MP3 path uses
 GStreamer and is not experimental.
+
+## Documentation by topic
+
+| Topic | Guide | What it explains |
+| --- | --- | --- |
+| Installation | [Installation guide](docs/installation.md) | Requirements, daemon, extension, package and troubleshooting |
+| Configuration | [Configuration](docs/configuration.md) | Preferences tabs, GSettings and daemon JSON |
+| Notifications | [Notifications and sounds](docs/notifications.md) | Events, MP3/audio validation, limits and fallback |
+| Architecture | [Architecture](docs/architecture.md) and [Protocol v1](docs/protocol.md) | Provider-to-D-Bus-to-GNOME data flow |
+| Providers | [Provider overview](docs/providers.md) | Built-in adapters and usage capabilities |
+| Development | [Development](docs/development.md) and [Creating a provider](docs/creating-provider.md) | Local checks and extension points |
+| Performance | [Performance](docs/performance.md) and [Memory audit](docs/performance-memory.md) | CPU, refresh, memory and stress results |
+| Publication | [Release guide](docs/releasing.md) and [EGO checklist](docs/gnome/ego-review-checklist.md) | Tagging, package validation and GNOME submission |
 
 ## Privacy and security
 

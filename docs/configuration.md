@@ -1,5 +1,12 @@
 # Configuration
 
+## Table of contents
+
+- [Configuration categories](#configuration-categories)
+- [Configuration screenshots](#configuration-screenshots)
+- [Runtime configuration](#runtime-configuration)
+- [Notification sound settings](#notification-sound-settings)
+
 The GNOME preferences window uses a native Adwaita sidebar with five categories:
 
 - **General**: provider mode, connected-provider filtering, session display, usage, limits, status

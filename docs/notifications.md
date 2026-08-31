@@ -1,5 +1,10 @@
 # Notifications and notification sounds
 
+## Table of contents
+
+- [Supported audio](#supported-audio)
+- [Playback path](#playback-path)
+
 Vox Sentry sends provider-specific GNOME notifications for waiting, completed, error and
 rate-limited transitions. Desktop notifications and sounds can be enabled independently in the
 **Notifications** preferences tab.
