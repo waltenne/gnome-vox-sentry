@@ -1,3 +1,4 @@
+import json
 import sqlite3
 
 from providers.claude import ClaudeProvider
@@ -34,6 +35,32 @@ def test_claude_cli_uses_recent_session_file(monkeypatch, tmp_path):
     assert session.status == AgentStatus.WORKING
     assert session.source.value == "cli"
     assert "private" not in str(session.metadata)
+
+
+def test_claude_last_prompt_marker_after_completed_turn_is_idle(monkeypatch, tmp_path):
+    sessions = tmp_path / "projects/project"
+    sessions.mkdir(parents=True)
+    path = sessions / "session-id.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps({
+                    "type": "assistant",
+                    "message": {"stop_reason": "end_turn", "content": [{"type": "text", "text": "done"}]},
+                }),
+                json.dumps({"type": "last-prompt", "lastPrompt": 'text containing "type":"user"'}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    provider = ClaudeProvider(executable="/does/not/exist", claude_home=tmp_path)
+    monkeypatch.setattr(provider, "_processes", lambda: [_process(42, ["claude"])])
+    monkeypatch.setattr("providers.claude.provider.is_recent", lambda _path, _seconds: False)
+
+    session = provider.get_sessions()[0]
+
+    assert session.status == AgentStatus.IDLE
 
 
 def test_copilot_cli_and_vscode_are_separate(monkeypatch, tmp_path):

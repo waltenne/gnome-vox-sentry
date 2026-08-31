@@ -113,6 +113,9 @@ export default class VoxSentryPreferences extends ExtensionPreferences {
             this._soundManager.destroy();
             this._soundManager = null;
             this._proxy = null;
+            this._providerRows.clear();
+            this._soundRows.clear();
+            this._settings = null;
             this._window = null;
             return false;
         });

@@ -22,5 +22,10 @@ local conversation database, process log and descendant agent workers: message s
 session working, a completed step marks it idle, and the process tree is the fallback. It reports
 the process working directory as the workspace and does not read trajectory contents.
 
-Antigravity usage and quota data are not reported yet. This avoids presenting stale or guessed
-limits while the product's local interfaces continue to evolve.
+Antigravity usage is read from the authenticated Cloud Code quota service used by `agy`. The
+provider first requests the shared five-hour and weekly quota summary and falls back to the
+project-scoped model quota response when the summary is unavailable. Fractions are converted to
+used percentages and reset timestamps are preserved. If the account is not authenticated or the
+service denies quota access (for example, a plan or regional entitlement), the UI intentionally
+shows `Consumption: Unavailable` rather than guessing. Values are cached for 60 seconds so the
+daemon does not contact the service on every status refresh.

@@ -44,6 +44,7 @@ session modes, forbidden imports, `run_dispose()` and missing repository URLs; s
 | License compatibility | PASS | Repository `LICENSE` is GNU GPL-2.0-or-later | Preserve license notices when publishing |
 | Public source repository | FAIL | Metadata URL is present, but inspected GitHub repository is incomplete | Resolve B-2 before EGO upload |
 | Package contains only required files | PASS | `pack-ego.sh`; ZIP allowlist below; no tests/docs/daemon/assets | Recheck every release candidate |
+| Static package analysis | PASS | `shexli` runs on the final ZIP in `.github/workflows/release.yml`; local wrapper is in `scripts/validate-ego-package.sh` | Re-run for every release candidate |
 
 ## Extension signal inventory
 
@@ -105,5 +106,6 @@ distribution traceability. The external daemon boundary is documented in
 - [x] License is GNU GPL-2.0-or-later and confirmed by the maintainer.
 - [x] Custom audio validation and system fallback are implemented.
 - [x] Package generated with GNOME tooling and inspected.
+- [x] `shexli` static analysis completed for the final ZIP.
 - [ ] Fresh-session enable/disable/re-enable and Preferences tests completed after logout/login.
 - [x] EGO blocker report and changelog are updated.

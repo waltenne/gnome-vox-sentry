@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import json
 import os
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -83,11 +83,25 @@ class ClaudeProvider(AgentProvider):
             return None
         state = None
         for line in tail.splitlines():
-            if re.search(r'"type"\s*:\s*"last-prompt"', line) or re.search(r'"type"\s*:\s*"user"', line):
-                state = "working"
-            elif re.search(r'"type"\s*:\s*"assistant"', line):
-                stop_reason = re.search(r'"stop_reason"\s*:\s*"([^"]+)"', line)
-                state = "idle" if stop_reason and stop_reason.group(1) == "end_turn" else "working"
+            try:
+                event = json.loads(line)
+            except (TypeError, json.JSONDecodeError):
+                continue
+            event_type = event.get("type")
+            if event_type == "assistant":
+                message = event.get("message") or {}
+                stop_reason = message.get("stop_reason") or event.get("stop_reason")
+                state = "idle" if stop_reason == "end_turn" else "working"
+            elif event_type == "user":
+                # Tool results are responses to Claude's own tool calls, not
+                # a new prompt. Only human text starts a new active turn.
+                message = event.get("message")
+                content = message.get("content") if isinstance(message, dict) else message
+                if isinstance(content, str) or any(
+                    isinstance(block, dict) and block.get("type") == "text"
+                    for block in content or []
+                ):
+                    state = "working"
         return state
 
     def get_sessions(self) -> list[AgentSession]:
@@ -123,8 +137,8 @@ class ClaudeProvider(AgentProvider):
             )
         return sessions
 
-    def get_status(self) -> AgentStatus:
-        sessions = self.get_sessions()
+    def get_status(self, sessions: list[AgentSession] | None = None) -> AgentStatus:
+        sessions = self.get_sessions() if sessions is None else sessions
         if not self.detect() or not sessions:
             return AgentStatus.OFFLINE
         if any(session.status == AgentStatus.WORKING for session in sessions):

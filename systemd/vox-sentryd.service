@@ -10,8 +10,8 @@ Environment=HOME=%h
 Environment=CODEX_HOME=%h/.codex
 Restart=on-failure
 RestartSec=2
+TimeoutStopSec=15s
 NoNewPrivileges=true
-PrivateTmp=true
 
 [Install]
 WantedBy=default.target

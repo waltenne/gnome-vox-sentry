@@ -1,33 +1,36 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Copyright (C) 2026 Vox Sentry contributors */
 
-.vox-sentry-indicator { padding: 0 7px; }
+.vox-sentry-indicator { padding: 0 5px; }
 
 .vox-sentry-traffic-light {
-    spacing: 2px;
-    padding: 3px 6px;
-    border-radius: 999px;
+    spacing: 6px;
+    min-height: 22px;
+    padding: 3px 4px;
     background-color: transparent;
 }
 
 .vox-sentry-lamp {
-    padding: 0;
-    margin: 0;
-    font-size: 16px;
-    line-height: 1;
+    width: 15px;
+    height: 15px;
+    min-width: 15px;
+    min-height: 15px;
+    max-width: 15px;
+    max-height: 15px;
+    border-radius: 999px;
+    overflow: hidden;
     /* Keep the traffic light visible in every state.  The inactive lamps
        use GNOME's theme-aware insensitive color instead of disappearing. */
-    color: -st-insensitive-color;
-    opacity: 0.58;
+    background-color: -st-insensitive-color;
+    opacity: 0.7;
 }
 
 .vox-sentry-lamp.active {
     opacity: 1;
-    text-shadow: 0 0 3px currentColor;
 }
-.vox-sentry-lamp-red-active { color: #ff5f57; }
-.vox-sentry-lamp-amber-active { color: #f5c451; }
-.vox-sentry-lamp-green-active { color: #45d483; }
+.vox-sentry-lamp-red-active { background-color: #ff5f57; }
+.vox-sentry-lamp-amber-active { background-color: #f5c451; }
+.vox-sentry-lamp-green-active { background-color: #45d483; }
 
 .vox-sentry-status-item { padding-top: 7px; padding-bottom: 2px; }
 .vox-sentry-status-label { font-weight: 600; }

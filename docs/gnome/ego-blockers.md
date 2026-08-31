@@ -52,6 +52,8 @@ and UX risk.
 ```text
 ./pack-ego.sh dist
 unzip -t dist/vox-sentry@gnome-vox-sentry.shell-extension.zip
+python -m pip install shexli==0.2.1
+shexli --format text dist/vox-sentry@gnome-vox-sentry.shell-extension.zip
 gnome-extensions install --force dist/vox-sentry@gnome-vox-sentry.shell-extension.zip
 gnome-extensions enable vox-sentry@gnome-vox-sentry
 systemctl --user status vox-sentryd

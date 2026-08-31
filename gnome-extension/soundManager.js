@@ -9,6 +9,8 @@ import GstPbutils from 'gi://GstPbutils';
 export const MAX_NOTIFICATION_SOUND_DURATION = 10;
 export const MAX_NOTIFICATION_SOUND_SIZE = 5 * 1024 * 1024;
 const DURATION_PADDING_TOLERANCE = 0.05;
+const DEFAULT_SOUND_CACHE_TTL_MS = 60000;
+const MAX_VALIDATED_SOUND_CACHE_ENTRIES = 32;
 export const SUPPORTED_NOTIFICATION_SOUND_FORMATS = ['mp3', 'ogg', 'oga', 'wav', 'flac'];
 export const SUPPORTED_NOTIFICATION_SOUND_MIME_TYPES = {
     mp3: ['audio/mpeg', 'audio/mp3', 'audio/x-mpeg'],
@@ -205,6 +207,8 @@ export class SoundManager {
         Gst.init(null);
         this._settings = settings;
         this._pipeline = null;
+        this._validatedSounds = new Map();
+        this._defaultSounds = new Map();
     }
 
     _configuredPath(eventType) {
@@ -219,9 +223,16 @@ export class SoundManager {
 
     _pathForEvent(eventType) {
         const custom = this._configuredPath(eventType);
-        if (!custom) return defaultSoundCandidates(eventType);
+        if (!custom) {
+            const cached = this._defaultSounds.get(eventType);
+            if (cached && Date.now() - cached.checkedAt < DEFAULT_SOUND_CACHE_TTL_MS)
+                return cached.path;
+            const path = defaultSoundCandidates(eventType);
+            this._defaultSounds.set(eventType, {path, checkedAt: Date.now()});
+            return path;
+        }
         try {
-            validateSoundFile(custom);
+            this._validateCached(custom);
             return custom;
         } catch (error) {
             // A removed or corrupted custom file must never disable event
@@ -238,7 +249,7 @@ export class SoundManager {
         const path = this._pathForEvent(eventType);
         if (!path) return;
         try {
-            validateSoundFile(path);
+            this._validateCached(path);
             this.play(path);
         } catch (error) {
             if (error.code === 'decoder-unavailable' && error.format === 'mp3') throw error;
@@ -247,8 +258,33 @@ export class SoundManager {
     }
 
     preview(path) {
-        validateSoundFile(path);
+        this._validateCached(path);
         this.play(path);
+    }
+
+    _validateCached(path) {
+        const file = Gio.File.new_for_path(path);
+        let info;
+        try {
+            info = file.query_info('standard::size,time::modified-usec', Gio.FileQueryInfoFlags.NONE, null);
+        } catch (_) {
+            this._validatedSounds.delete(path);
+            return validateSoundFile(path);
+        }
+        // GIO exposes this timestamp with different numeric types across
+        // backends. Reading it as a string avoids a type assertion while
+        // still invalidating the cache when the file changes.
+        const modified = info.get_attribute_as_string('time::modified-usec') || '';
+        const signature = `${info.get_size()}:${modified}`;
+        const cached = this._validatedSounds.get(path);
+        if (cached && cached.signature === signature) return cached.result;
+        const result = validateSoundFile(path);
+        if (this._validatedSounds.size >= MAX_VALIDATED_SOUND_CACHE_ENTRIES && !cached) {
+            const oldestPath = this._validatedSounds.keys().next().value;
+            if (oldestPath) this._validatedSounds.delete(oldestPath);
+        }
+        this._validatedSounds.set(path, {signature, result});
+        return result;
     }
 
     play(path) {
@@ -278,5 +314,7 @@ export class SoundManager {
 
     destroy() {
         this.stop();
+        this._validatedSounds.clear();
+        this._defaultSounds.clear();
     }
 }

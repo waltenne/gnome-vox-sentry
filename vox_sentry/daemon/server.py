@@ -10,6 +10,7 @@ import signal
 from ..builtins import default_registry
 from ..config import load_config
 from ..core import VoxSentryCore
+from ..models import AgentStatus, Snapshot
 from ..protocol import snapshot_to_json
 
 LOG = logging.getLogger("vox-sentryd")
@@ -41,13 +42,21 @@ class DbusService:
         self.Gio, self.GLib, self.core = Gio, GLib, core
         self.loop, self.connection = GLib.MainLoop(), None
         self.name_lost = False
+        self._base_interval = 2
+        self._tick_source = 0
+        self._stopping = False
         self.interface_info = Gio.DBusNodeInfo.new_for_xml(INTROSPECTION).interfaces[0]
         self.core.add_listener(self._event)
 
     def start(self) -> None:
         self.Gio.bus_own_name(self.Gio.BusType.SESSION, BUS_NAME, self.Gio.BusNameOwnerFlags.NONE, self._bus_acquired, None, self._name_lost)
-        interval = max(1, int(self.core.config.get("monitoring", {}).get("refreshInterval", 2)))
-        self.core.refresh(); self.GLib.timeout_add_seconds(interval, self._tick); self.loop.run()
+        self._base_interval = max(1, int(self.core.config.get("monitoring", {}).get("refreshInterval", 2)))
+        snapshot = self.core.refresh()
+        self._schedule_tick(self._next_interval(snapshot))
+        try:
+            self.loop.run()
+        finally:
+            self.request_stop()
 
     def _bus_acquired(self, connection, _name) -> None:
         self.connection = connection
@@ -69,6 +78,7 @@ class DbusService:
                 invocation.return_value(self.GLib.Variant("(s)", (event_type,)))
                 return
             snapshot = self.core.reload() if method == "Reload" else self.core.get_status()
+            if method == "Reload": self._schedule_tick(self._next_interval(snapshot))
             if method == "GetProviders": value = json.dumps([p.to_dict() for p in snapshot.providers])
             elif method == "GetSessions": value = json.dumps([s.to_dict() for s in snapshot.sessions])
             elif method == "GetUsage": value = json.dumps({k: v.to_dict() for k, v in snapshot.usage.items()})
@@ -80,10 +90,39 @@ class DbusService:
             LOG.exception("D-Bus call failed"); invocation.return_dbus_error(f"{INTERFACE}.Error", str(exc))
 
     def _tick(self) -> bool:
+        self._tick_source = 0
+        if self._stopping:
+            return False
         before = self.core.get_status().to_dict(); after = self.core.refresh()
         before.pop("generatedAt", None); current = after.to_dict(); current.pop("generatedAt", None)
         if self.connection and before != current: self._signal("StatusChanged", snapshot_to_json(after))
-        return True
+        self._schedule_tick(self._next_interval(after))
+        return False
+
+    def _schedule_tick(self, interval: int) -> None:
+        if self._stopping:
+            return
+        if self._tick_source:
+            self.GLib.Source.remove(self._tick_source)
+            self._tick_source = 0
+        self._tick_source = self.GLib.timeout_add_seconds(interval, self._tick)
+
+    def request_stop(self) -> None:
+        self._stopping = True
+        if self._tick_source:
+            self.GLib.Source.remove(self._tick_source)
+            self._tick_source = 0
+        self.loop.quit()
+
+    def _next_interval(self, snapshot: Snapshot) -> int:
+        # Keep active and interactive sessions responsive. Once all providers
+        # are idle or unavailable, reduce wakeups while retaining bounded
+        # discovery latency for a newly opened CLI/IDE session.
+        if snapshot.status in {AgentStatus.WORKING, AgentStatus.THINKING, AgentStatus.WAITING}:
+            return self._base_interval
+        if snapshot.status in {AgentStatus.IDLE, AgentStatus.COMPLETED}:
+            return max(self._base_interval, 10)
+        return max(self._base_interval, 20)
 
     def _signal(self, name: str, value: str) -> None:
         if self.connection:
@@ -104,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     core = VoxSentryCore(default_registry(), load_config())
     if args.once: print(snapshot_to_json(core.refresh())); return 0
     service = DbusService(core)
-    signal.signal(signal.SIGTERM, lambda *_: service.loop.quit()); signal.signal(signal.SIGINT, lambda *_: service.loop.quit())
+    signal.signal(signal.SIGTERM, lambda *_: service.request_stop()); signal.signal(signal.SIGINT, lambda *_: service.request_stop())
     service.start()
     # Let systemd's Restart=on-failure recover from a transient D-Bus name
     # collision or a session-bus reconnect. A normal SIGTERM/SIGINT remains 0.

@@ -40,7 +40,11 @@ export class NotificationManager {
                 source,
                 title,
                 body,
-                isTransient: false,
+                // Status notifications should not remain in GNOME's
+                // notification history indefinitely. This also prevents a
+                // repeated provider transition test from retaining one
+                // notification object per event in the Shell process.
+                isTransient: true,
             }));
         } catch (error) {
             log(`Vox Sentry notification failed: ${error.message}`);

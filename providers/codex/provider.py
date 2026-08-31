@@ -17,6 +17,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from providers.google_process import process_snapshot
 from vox_sentry.models import (
     AgentSession,
     AgentStatus,
@@ -25,13 +26,6 @@ from vox_sentry.models import (
     SessionSource,
 )
 from vox_sentry.provider import AgentProvider
-
-
-def _proc_read(pid: int, name: str) -> str | None:
-    try:
-        return Path(f"/proc/{pid}/{name}").read_text(encoding="utf-8", errors="replace")
-    except (FileNotFoundError, PermissionError, OSError):
-        return None
 
 
 class CodexProvider(AgentProvider):
@@ -68,27 +62,18 @@ class CodexProvider(AgentProvider):
 
     def _processes(self) -> list[dict]:
         result = []
-        for entry in Path("/proc").iterdir():
-            if not entry.name.isdigit(): continue
-            pid = int(entry.name); raw = _proc_read(pid, "cmdline")
-            if not raw: continue
-            argv = [part for part in raw.split("\0") if part]
-            if not argv: continue
-            try: executable_name = Path(os.readlink(f"/proc/{pid}/exe")).name
-            except (FileNotFoundError, PermissionError, OSError): executable_name = Path(argv[0]).name
+        for process in process_snapshot():
+            pid, argv = process["pid"], process["argv"]
+            executable_name = process["executable"]
             if executable_name in {"codex-code-mode-host", "codex-code-mode"} or Path(argv[0]).name in {"codex-code-mode-host", "codex-code-mode"}:
                 continue
-            command = " ".join(argv).lower()
             is_codex_binary = executable_name in {"codex", "codex-cli"} or Path(argv[0]).name in {"codex", "codex-cli"}
-            is_vscode_codex = "openai.chatgpt" in command and "codex" in command
+            is_vscode_codex = "openai.chatgpt" in process["command"] and "codex" in process["command"]
             if not is_codex_binary and not is_vscode_codex: continue
-            try: cwd = os.readlink(f"/proc/{pid}/cwd")
-            except (FileNotFoundError, PermissionError, OSError): cwd = None
-            environment = _proc_read(pid, "environ") or ""
-            environment_keys = {item.split("=", 1)[0] for item in environment.split("\0") if "=" in item}
-            originator = next((item.split("=", 1)[1] for item in environment.split("\0") if item.startswith("CODEX_INTERNAL_ORIGINATOR_OVERRIDE=")), None)
-            vscode = originator == "codex_vscode" or "vscode" in command or "--analytics-default-enabled" in argv or "VSCODE_PID" in environment_keys
-            result.append({"pid": pid, "argv": argv, "cwd": cwd, "app_server": "app-server" in argv, "vscode": vscode, "originator": originator})
+            environment_keys = process["environment_keys"]
+            originator = process.get("environment_values", {}).get("CODEX_INTERNAL_ORIGINATOR_OVERRIDE")
+            vscode = originator == "codex_vscode" or "vscode" in process["command"] or "--analytics-default-enabled" in argv or "VSCODE_PID" in environment_keys
+            result.append({"pid": pid, "argv": argv, "cwd": process["cwd"], "app_server": "app-server" in argv, "vscode": vscode, "originator": originator})
         return result
 
     def _recent_metadata(self, cwd: str | None, allow_any_cwd: bool = False, source: str | None = None) -> dict:
@@ -237,59 +222,75 @@ class CodexProvider(AgentProvider):
 
         Only the record type is retained from the tail; message/content fields are discarded.
         """
+        rollouts = self._active_rollouts(pid)
+        return rollouts[0] if rollouts else ({}, None)
+
+    def _active_rollouts(self, pid: int) -> list[tuple[dict, str | None]]:
+        """Read every rollout held by a process, not only the newest chat.
+
+        One Codex app-server can serve several VS Code chats at once. Returning one
+        session per open rollout prevents an idle chat from hiding another chat that
+        is still processing.
+        """
         paths = []
         try:
             for fd in Path(f"/proc/{pid}/fd").iterdir():
                 try: target = os.readlink(fd)
                 except OSError: continue
                 if target.endswith(".jsonl"): paths.append(Path(target))
-        except OSError: return {}, None
-        for path in sorted(set(paths), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True):
+        except OSError: return []
+        result = []
+        for path in sorted(set(paths), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)[:50]:
             try:
                 with path.open(encoding="utf-8", errors="replace") as handle: first = json.loads(handle.readline())
                 payload = first.get("payload", {})
                 metadata = {"session_id": payload.get("session_id") or payload.get("id"), "model": payload.get("model"), "source": payload.get("source"), "started_at": payload.get("timestamp"), "cli_version": payload.get("cli_version"), "cwd": payload.get("cwd")}
                 event_type = self._event_type_from_path(path)
-                return metadata, event_type
+                result.append((metadata, event_type))
             except (OSError, json.JSONDecodeError): continue
-        return {}, None
+        return result
 
     def get_sessions(self) -> list[AgentSession]:
         processes = self._processes()
         if not processes: return []
         sessions = []
         for process in processes:
-            metadata, event_type = self._active_rollout(process["pid"])
+            rollouts = self._active_rollouts(process["pid"])
+            if not rollouts:
+                # Keep the fallback hook for CLI processes and tests that provide
+                # rollout data without exposing a real /proc/<pid>/fd entry.
+                rollouts = [self._active_rollout(process["pid"])]
             expected_source = "vscode" if process["vscode"] else "cli"
-            metadata = {**self._recent_metadata(process["cwd"], source=expected_source), **metadata}
-            if not metadata.get("session_id"):
-                # The systemd sandbox may hide /proc/<pid>/cwd and /proc/<pid>/fd
-                # even though the session files themselves are readable. Use the
-                # newest metadata for the matching frontend as a fallback for
-                # both terminal CLI and VS Code app-server sessions.
-                metadata = {**self._recent_metadata(None, allow_any_cwd=True, source=expected_source), **metadata}
-            if event_type is None:
-                event_type = self._recent_event_type(metadata.get("session_id"))
-            source = SessionSource.VSCODE if process["vscode"] else SessionSource.CLI
-            status = {
-                "task_started": AgentStatus.THINKING,
-                "turn_started": AgentStatus.THINKING,
-                "item_started": AgentStatus.WORKING,
-                "user_message": AgentStatus.THINKING,
-                "task_complete": AgentStatus.IDLE,
-                "turn_complete": AgentStatus.IDLE,
-                "item_completed": AgentStatus.IDLE,
-                "turn_aborted": AgentStatus.ERROR,
-                "request_user_input": AgentStatus.WAITING,
-            }.get(event_type, AgentStatus.IDLE)
-            session_id = metadata.get("session_id") or f"codex-{process['pid']}"
-            if any(session.id == session_id for session in sessions): session_id = f"{session_id}-{process['pid']}"
-            workspace = metadata.get("cwd") or process["cwd"]
-            sessions.append(AgentSession(session_id, self.id, source, status, process["pid"], workspace, Path(workspace).name if workspace else None, metadata.get("model"), metadata.get("started_at"), datetime.now(timezone.utc).isoformat(), metadata={"observation": "process", "appServer": process["app_server"], "eventType": event_type, "originator": process["originator"], "processKind": "vscode-app-server" if process["app_server"] else "cli"}))
+            for metadata, event_type in rollouts:
+                metadata = {**self._recent_metadata(process["cwd"], source=expected_source), **metadata}
+                if not metadata.get("session_id"):
+                    # The systemd sandbox may hide /proc/<pid>/cwd and /proc/<pid>/fd
+                    # even though the session files themselves are readable. Use the
+                    # newest metadata for the matching frontend as a fallback for
+                    # both terminal CLI and VS Code app-server sessions.
+                    metadata = {**self._recent_metadata(None, allow_any_cwd=True, source=expected_source), **metadata}
+                if event_type is None:
+                    event_type = self._recent_event_type(metadata.get("session_id"))
+                source = SessionSource.VSCODE if process["vscode"] else SessionSource.CLI
+                status = {
+                    "task_started": AgentStatus.THINKING,
+                    "turn_started": AgentStatus.THINKING,
+                    "item_started": AgentStatus.WORKING,
+                    "user_message": AgentStatus.THINKING,
+                    "task_complete": AgentStatus.IDLE,
+                    "turn_complete": AgentStatus.IDLE,
+                    "item_completed": AgentStatus.IDLE,
+                    "turn_aborted": AgentStatus.ERROR,
+                    "request_user_input": AgentStatus.WAITING,
+                }.get(event_type, AgentStatus.IDLE)
+                session_id = metadata.get("session_id") or f"codex-{process['pid']}"
+                if any(session.id == session_id for session in sessions): session_id = f"{session_id}-{process['pid']}"
+                workspace = metadata.get("cwd") or process["cwd"]
+                sessions.append(AgentSession(session_id, self.id, source, status, process["pid"], workspace, Path(workspace).name if workspace else None, metadata.get("model"), metadata.get("started_at"), datetime.now(timezone.utc).isoformat(), metadata={"observation": "process", "appServer": process["app_server"], "eventType": event_type, "originator": process["originator"], "processKind": "vscode-app-server" if process["app_server"] else "cli"}))
         return sessions
 
-    def get_status(self) -> AgentStatus:
-        sessions = self.get_sessions()
+    def get_status(self, sessions: list[AgentSession] | None = None) -> AgentStatus:
+        sessions = self.get_sessions() if sessions is None else sessions
         if not self.detect() or not sessions: return AgentStatus.OFFLINE
         usage = self.get_usage()
         details = usage.details if usage else {}

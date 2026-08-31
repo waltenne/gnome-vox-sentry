@@ -1,3 +1,5 @@
+import json
+
 from providers.antigravity.provider import AntigravityProvider
 from providers.gemini.provider import GeminiProvider
 from vox_sentry.models import AgentStatus
@@ -155,3 +157,119 @@ def test_antigravity_log_state_changes_from_working_to_idle(monkeypatch, tmp_pat
         encoding="utf-8",
     )
     assert provider._log_state(99) == "idle"
+
+
+def test_antigravity_reads_shared_quota_summary(monkeypatch, tmp_path):
+    provider = AntigravityProvider(executable="/does/not/exist", gemini_home=tmp_path)
+    provider._credentials = lambda: {"access_token": "test-token", "expiry_date": 4_000_000_000_000}
+    responses = {
+        "loadCodeAssist": {"cloudaicompanionProject": "aicode-consumers"},
+        "retrieveUserQuotaSummary": {
+            "groups": [
+                {
+                    "displayName": "Gemini Models",
+                    "buckets": [
+                        {"bucketId": "gemini-5h", "remainingFraction": 0.81, "resetTime": "2026-08-31T15:00:00Z"},
+                        {"bucketId": "gemini-weekly", "remainingFraction": 0.64, "resetTime": "2026-09-05T15:00:00Z"},
+                    ],
+                },
+                {
+                    "displayName": "Claude and GPT models",
+                    "buckets": [
+                        {"bucketId": "3p-5h", "remainingFraction": 0.92, "resetTime": "2026-08-31T15:00:00Z"},
+                        {"bucketId": "3p-weekly", "remainingFraction": 0.77, "resetTime": "2026-09-05T15:00:00Z"},
+                    ],
+                },
+            ]
+        },
+    }
+    monkeypatch.setattr(
+        provider,
+        "_post_json",
+        lambda endpoint, token, payload: next(
+            (value for key, value in responses.items() if endpoint.endswith(key)), None
+        ),
+    )
+
+    usage = provider.get_usage()
+
+    assert provider.get_capabilities().to_dict()["usage"] is True
+    assert usage is not None
+    assert usage.session_percent == 19.0
+    assert usage.limit_percent == 36.0
+    assert usage.details["primary"]["resetTime"] == "2026-08-31T15:00:00Z"
+    assert usage.details["secondary"]["resetTime"] == "2026-09-05T15:00:00Z"
+
+
+def test_antigravity_prefers_official_cli_usage_output(monkeypatch, tmp_path):
+    provider = AntigravityProvider(executable="/usr/bin/agy", gemini_home=tmp_path)
+    output = {
+        "command": {
+            "name": "usage",
+            "data": {
+                "groups": [
+                    {
+                        "name": "Gemini Models",
+                        "buckets": [
+                            {"id": "gemini-weekly", "window": "weekly", "remaining_fraction": 0.90, "reset_time": "2026-09-06T00:00:00Z"},
+                            {"id": "gemini-5h", "window": "5h", "remaining_fraction": 0.75, "reset_time": "2026-08-31T15:00:00Z"},
+                        ],
+                    }
+                ]
+            },
+        }
+    }
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps(output) + "\n"
+
+    monkeypatch.setattr("providers.antigravity.provider.subprocess.run", lambda *args, **kwargs: Result())
+    usage = provider.get_usage()
+
+    assert usage is not None
+    assert usage.details["source"] == "antigravity_cli_usage"
+    assert usage.session_percent == 25.0
+    assert usage.limit_percent == 10.0
+
+
+def test_antigravity_falls_back_to_model_quota(monkeypatch, tmp_path):
+    provider = AntigravityProvider(executable="/does/not/exist", gemini_home=tmp_path)
+    provider._credentials = lambda: {"access_token": "test-token"}
+
+    def post(endpoint, _token, _payload):
+        if endpoint.endswith("loadCodeAssist"):
+            return {"cloudaicompanionProject": "aicode-consumers"}
+        if endpoint.endswith("fetchAvailableModels"):
+            return {
+                "models": {
+                    "gemini-3-flash": {
+                        "displayName": "Gemini Flash",
+                        "quotaInfo": {"remainingFraction": 0.73, "resetTime": "2026-09-01T00:00:00Z"},
+                    }
+                }
+            }
+        return None
+
+    monkeypatch.setattr(provider, "_post_json", post)
+    usage = provider.get_usage()
+
+    assert usage is not None
+    assert usage.session_percent == 27.0
+    assert usage.details["source"] == "antigravity_cloud_code_models"
+
+
+def test_antigravity_rejects_expired_usage_token(monkeypatch, tmp_path):
+    provider = AntigravityProvider(executable="/does/not/exist", gemini_home=tmp_path)
+    provider._credentials = lambda: {"access_token": "expired", "expiry_date": 1}
+    called = False
+
+    def post(*_args):
+        nonlocal called
+        called = True
+        return {}
+
+    monkeypatch.setattr(provider, "_post_json", post)
+
+    assert provider.get_usage() is None
+    assert called is False

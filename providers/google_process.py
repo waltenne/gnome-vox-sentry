@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
+
+_PROCESS_CACHE_TTL = 1.0
+_process_cache: tuple[float, list[dict]] | None = None
 
 
 def proc_read(pid: int, name: str) -> str | None:
@@ -13,8 +17,15 @@ def proc_read(pid: int, name: str) -> str | None:
         return None
 
 
-def process_snapshot() -> list[dict]:
+def process_snapshot(*, force: bool = False) -> list[dict]:
     """Return process metadata without collecting command output or file contents."""
+    global _process_cache
+    now = time.monotonic()
+    if not force and _process_cache is not None and now - _process_cache[0] < _PROCESS_CACHE_TTL:
+        # Providers annotate their own copies (for example with `vscode`).
+        # Keep the cached base snapshot isolated from those annotations.
+        return [dict(process) for process in _process_cache[1]]
+
     result = []
     try:
         entries = Path("/proc").iterdir()
@@ -39,9 +50,15 @@ def process_snapshot() -> list[dict]:
         except (FileNotFoundError, PermissionError, OSError):
             cwd = None
         environment = proc_read(pid, "environ") or ""
-        environment_keys = {
-            item.split("=", 1)[0] for item in environment.split("\0") if "=" in item
-        }
+        environment_keys = set()
+        environment_values = {}
+        for item in environment.split("\0"):
+            if "=" not in item:
+                continue
+            key, value = item.split("=", 1)
+            environment_keys.add(key)
+            if key == "CODEX_INTERNAL_ORIGINATOR_OVERRIDE":
+                environment_values[key] = value
         result.append(
             {
                 "pid": pid,
@@ -51,9 +68,17 @@ def process_snapshot() -> list[dict]:
                 "executable": executable.lower(),
                 "cwd": cwd,
                 "environment_keys": environment_keys,
+                "environment_values": environment_values,
             }
         )
+    _process_cache = (now, result)
     return result
+
+
+def invalidate_process_snapshot() -> None:
+    """Drop the shared process snapshot before a new daemon refresh cycle."""
+    global _process_cache
+    _process_cache = None
 
 
 def _parent_pid(pid: int) -> int | None:

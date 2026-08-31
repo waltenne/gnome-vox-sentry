@@ -4,6 +4,8 @@ import logging
 from collections.abc import Callable
 from datetime import datetime, timezone
 
+from providers.google_process import invalidate_process_snapshot
+
 from .aggregate import aggregate_status
 from .config import load_config
 from .models import AgentEvent, AgentSession, AgentStatus, AgentUsage, Snapshot
@@ -34,6 +36,9 @@ class VoxSentryCore:
         return enabled if mode == "multi" else None
 
     def refresh(self) -> Snapshot:
+        # All providers observe one process list per refresh. This avoids
+        # rescanning /proc for each provider's detect/session/status call.
+        invalidate_process_snapshot()
         infos, statuses, next_sessions, next_usage = self.registry.inspect(self._enabled()), [], {}, {}
         for info in infos:
             if not info.active:
@@ -41,8 +46,9 @@ class VoxSentryCore:
                 statuses.append(AgentStatus.OFFLINE); continue
             provider = self.registry.get(info.id)
             try:
-                for session in provider.get_sessions(): next_sessions[session.id] = session
-                info.status = provider.get_status()
+                sessions = provider.get_sessions()
+                for session in sessions: next_sessions[session.id] = session
+                info.status = provider.get_status(sessions)
                 statuses.append(info.status)
                 usage = provider.get_usage()
                 if usage is not None: next_usage[provider.id] = usage

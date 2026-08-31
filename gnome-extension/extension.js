@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Copyright (C) 2026 Vox Sentry contributors
 
+import Clutter from 'gi://Clutter';
 import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
@@ -15,6 +16,20 @@ const BUS = 'io.github.gnome_vox_sentry';
 const PATH = '/io/github/gnome_vox_sentry';
 const IFACE = 'io.github.gnome_vox_sentry';
 
+function formatReset(window) {
+    const timestamp = Number(window && window.resetsAt);
+    if (!Number.isFinite(timestamp) || timestamp <= 0) return '';
+    const date = new Date(timestamp * 1000);
+    if (!Number.isFinite(date.getTime())) return '';
+
+    const time = date.toLocaleTimeString(undefined, {hour: '2-digit', minute: '2-digit'});
+    if (Number(window.windowDurationMins) >= 10080) {
+        const day = date.toLocaleDateString(undefined, {day: 'numeric', month: 'short'});
+        return ` · reset ${day} · ${time}`;
+    }
+    return ` · reset ${time}`;
+}
+
 function isCancelled(error) {
     return error instanceof GLib.Error && error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED);
 }
@@ -26,7 +41,7 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
         this._settings = settings;
         this._openPreferencesCallback = openPreferences;
         this._settingsSignal = this._settings.connect('changed', () => {
-            if (this._snapshot && !this.menu.isOpen) this._render(this._snapshot);
+            if (this._snapshot && !this.menu.isOpen) this._render(this._snapshot, true);
         });
         this._signalIds = [];
         this._refreshSource = 0;
@@ -34,9 +49,21 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
         this._refreshCancellable = null;
         this._notificationManager = new NotificationManager(settings);
         this._lamps = {};
-        this._trafficLight = new St.BoxLayout({style_class: 'vox-sentry-traffic-light'});
+        this._trafficLight = new St.BoxLayout({
+            style_class: 'vox-sentry-traffic-light',
+            x_expand: false,
+            y_expand: false,
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
         for (const color of ['red', 'amber', 'green']) {
-            const lamp = new St.Label({text: '●', style_class: `vox-sentry-lamp vox-sentry-lamp-${color}`});
+            const lamp = new St.Widget({
+                style_class: `vox-sentry-lamp vox-sentry-lamp-${color}`,
+                x_expand: false,
+                y_expand: false,
+                x_align: Clutter.ActorAlign.CENTER,
+                y_align: Clutter.ActorAlign.CENTER,
+            });
             this._trafficLight.add_child(lamp);
             this._lamps[color] = lamp;
         }
@@ -54,7 +81,9 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         this._providers = new PopupMenu.PopupMenuSection();
         this.menu.addMenuItem(this._providers);
+        this._menuKey = null;
         this._lastProviderStates = null;
+        this._pendingReady = new Map();
         this._refresh = new PopupMenu.PopupMenuItem('Refresh status');
         this._refresh.connect('activate', () => this._refreshNow());
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
@@ -101,7 +130,8 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
             if (this._statusCancellable !== cancellable) return;
             this._statusCancellable = null;
             try {
-                this._render(JSON.parse(result.deep_unpack()[0]));
+                const reply = this._proxy.call_finish(result);
+                this._render(JSON.parse(reply.deep_unpack()[0]));
             } catch (error) {
                 if (isCancelled(error)) return;
                 log(`Vox Sentry status request failed: ${error.message}`);
@@ -122,7 +152,8 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
                 if (!this._refresh) return;
                 this._refresh.label.text = 'Refresh status';
                 try {
-                    this._render(JSON.parse(result.deep_unpack()[0]));
+                    const reply = this._proxy.call_finish(result);
+                    this._render(JSON.parse(reply.deep_unpack()[0]));
                 } catch (error) {
                     if (isCancelled(error)) return;
                     log(`Vox Sentry refresh failed: ${error.message}`);
@@ -155,8 +186,11 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
             eventType);
     }
 
-    _render(snapshot) {
+    _render(snapshot, force = false) {
+        const snapshotKey = JSON.stringify({...snapshot, generatedAt: undefined});
+        if (!force && this._snapshotKey === snapshotKey) return;
         this._snapshot = snapshot;
+        this._snapshotKey = snapshotKey;
         if (!this._trafficLight || !this._title) return;
         const status = snapshot.status || 'UNKNOWN';
         const connectedProviders = this._connectedProviders(snapshot);
@@ -177,7 +211,7 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
         this._setTrafficLight(presentation.light);
         this._title.label.text = `Vox Sentry · ${presentation.label}`;
         this._statusDetail.label.text = presentation.detail;
-        this._notifyProviderTransitions(connectedProviders);
+        this._notifyProviderTransitions(connectedProviders, snapshot);
         if (this.menu.isOpen) return;
         this._renderMenu(snapshot);
     }
@@ -204,8 +238,11 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
         return snapshot.providers || [];
     }
 
-    _notifyProviderTransitions(providers) {
+    _notifyProviderTransitions(providers, snapshot) {
         const current = Object.fromEntries(providers.map(provider => [provider.id, provider.status]));
+        for (const providerId of this._pendingReady.keys()) {
+            if (!(providerId in current)) this._pendingReady.delete(providerId);
+        }
         if (this._lastProviderStates === null) {
             this._lastProviderStates = current;
             return;
@@ -213,20 +250,48 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
         const byId = Object.fromEntries(providers.map(provider => [provider.id, provider]));
         for (const [providerId, nextStatus] of Object.entries(current)) {
             const previousStatus = this._lastProviderStates[providerId];
-            if (!previousStatus || previousStatus === nextStatus) continue;
+            if (!previousStatus) continue;
             const provider = byId[providerId];
             let message = null;
             let eventType = null;
-            if (['WORKING', 'THINKING'].includes(previousStatus) && ['IDLE', 'COMPLETED'].includes(nextStatus)) {
-                message = nextStatus === 'COMPLETED' ? 'completed the task.' : 'is ready.';
+            const activeSession = (snapshot.sessions || []).some(session =>
+                session.provider === providerId &&
+                ['WORKING', 'THINKING', 'WAITING'].includes(session.status));
+            const becameReady = ['WORKING', 'THINKING'].includes(previousStatus) &&
+                ['IDLE', 'COMPLETED'].includes(nextStatus);
+            if (['WORKING', 'THINKING'].includes(nextStatus) ||
+                (['IDLE', 'COMPLETED'].includes(nextStatus) && activeSession)) {
+                // A short IDLE gap can occur while Codex closes one item and
+                // appends the next one. Never announce readiness while a
+                // normalized provider session is still active.
+                this._pendingReady.delete(providerId);
+                continue;
+            }
+            if (nextStatus === 'COMPLETED' && becameReady) {
+                message = 'completed the task.';
                 eventType = 'COMPLETED';
+            } else if (nextStatus === 'IDLE' && (becameReady || this._pendingReady.has(providerId))) {
+                const pending = this._pendingReady.get(providerId);
+                const confirmations = pending ? pending.confirmations + 1 : 1;
+                if (confirmations < 2) {
+                    this._pendingReady.set(providerId, {confirmations});
+                    continue;
+                }
+                this._pendingReady.delete(providerId);
+                message = 'is ready.';
+                eventType = 'COMPLETED';
+            } else if (previousStatus === nextStatus) {
+                continue;
             } else if (nextStatus === 'RATE_LIMITED' && previousStatus !== 'RATE_LIMITED') {
+                this._pendingReady.delete(providerId);
                 message = 'reached its usage limit.';
                 eventType = 'RATE_LIMITED';
             } else if (nextStatus === 'WAITING' && previousStatus !== 'WAITING') {
+                this._pendingReady.delete(providerId);
                 message = 'is waiting for your input.';
                 eventType = 'WAITING';
             } else if (nextStatus === 'ERROR' && previousStatus !== 'ERROR') {
+                this._pendingReady.delete(providerId);
                 message = 'reported an error.';
                 eventType = 'ERROR';
             }
@@ -249,6 +314,15 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
 
     _renderMenu(snapshot) {
         if (!this._providers) return;
+        const menuKey = JSON.stringify({
+            snapshot: this._snapshotKey,
+            multipleSessions: this._settings.get_boolean('show-multiple-sessions'),
+            showUsage: this._settings.get_boolean('show-usage'),
+            showLimits: this._settings.get_boolean('show-limits'),
+            showConnectedOnly: this._settings.get_boolean('show-connected-only'),
+        });
+        if (this._menuKey === menuKey) return;
+        this._menuKey = menuKey;
         this._providers.removeAll();
         const allSessions = snapshot.sessions || [];
         const showMultipleSessions = this._settings.get_boolean('show-multiple-sessions') !== false;
@@ -286,7 +360,7 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
                     const duration = mins >= 10080 ? '7d' : mins >= 1440 ? `${Math.round(mins / 1440)}d` : `${Math.round(mins / 60)}h`;
                     const percent = Number(window.usedPercent);
                     const level = Number.isFinite(percent) && percent >= 90 ? 'critical' : Number.isFinite(percent) && percent >= 70 ? 'warning' : 'healthy';
-                    const reset = window.resetsAt ? ` · reset ${new Date(window.resetsAt * 1000).toLocaleTimeString()}` : '';
+                    const reset = formatReset(window);
                     addLine(menu, duration, [{text: `${window.usedPercent}% used`, style_class: level}, {text: reset, style_class: 'reset'}]);
                     count++;
                 };
@@ -361,9 +435,12 @@ const AgentIndicator = GObject.registerClass(class AgentIndicator extends PanelM
         this._settings = null;
         this._openPreferencesCallback = null;
         this._trafficLight = null;
+        this._snapshotKey = null;
         this._title = null;
         this._statusDetail = null;
         this._providers = null;
+        this._menuKey = null;
+        this._pendingReady.clear();
         this._refresh = null;
     }
 

@@ -169,8 +169,8 @@ class GeminiProvider(AgentProvider):
             )
         return sessions
 
-    def get_status(self) -> AgentStatus:
-        sessions = self.get_sessions()
+    def get_status(self, sessions: list[AgentSession] | None = None) -> AgentStatus:
+        sessions = self.get_sessions() if sessions is None else sessions
         if not self.detect() or not sessions:
             return AgentStatus.OFFLINE
         if any(session.status == AgentStatus.WORKING for session in sessions):

@@ -46,6 +46,25 @@ def test_codex_keeps_cli_and_vscode_sessions_separate(monkeypatch, tmp_path):
     assert {(session.pid, session.source.value) for session in sessions} == {(10, "cli"), (20, "vscode")}
 
 
+def test_codex_app_server_reports_all_open_chats(monkeypatch, tmp_path):
+    provider = CodexProvider(executable="/usr/bin/codex", codex_home=tmp_path)
+    process = {"pid": 20, "argv": ["codex", "app-server"], "cwd": "/workspace", "app_server": True, "vscode": True, "originator": "codex_vscode"}
+    monkeypatch.setattr(provider, "_processes", lambda: [process])
+    monkeypatch.setattr(provider, "_active_rollouts", lambda _pid: [
+        ({"session_id": "chat-idle", "cwd": "/workspace/idle", "source": "vscode"}, "task_complete"),
+        ({"session_id": "chat-working", "cwd": "/workspace/working", "source": "vscode"}, "item_started"),
+    ])
+    monkeypatch.setattr(provider, "get_usage", lambda: None)
+
+    sessions = provider.get_sessions()
+
+    assert {session.id: session.status for session in sessions} == {
+        "chat-idle": AgentStatus.IDLE,
+        "chat-working": AgentStatus.WORKING,
+    }
+    assert provider.get_status(sessions) == AgentStatus.WORKING
+
+
 def test_cli_status_follows_turn_events(monkeypatch, tmp_path):
     provider = CodexProvider(executable="/usr/bin/codex", codex_home=tmp_path)
     process = {"pid": 10, "argv": ["codex"], "cwd": "/workspace/cli", "app_server": False, "vscode": False, "originator": None}
