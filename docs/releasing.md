@@ -3,8 +3,9 @@
 Releases are created from an annotated semantic-version tag. The GitHub Actions workflow at
 `.github/workflows/release.yml` runs the test suite, Python linting, JavaScript syntax checks,
 ShellCheck, GNOME tooling, the GNOME `shexli` static analyzer and the EGO package validator before
-publishing the extension bundle. The workflow pins `shexli` to `0.2.1` so a new analyzer release
-cannot silently change the result of an existing release pipeline.
+publishing the extension bundle. The workflow pins `shexli` to `0.2.1` and `tree-sitter` below
+`0.26` because the current analyzer crashes with the newer parser ABI; this keeps the release
+pipeline reproducible until `shexli` publishes a compatible fix.
 
 ## Release procedure
 
@@ -15,7 +16,7 @@ cannot silently change the result of an existing release pipeline.
    pytest -q
    ruff check vox_sentry providers tests
    ./pack-ego.sh dist
-   python -m pip install shexli==0.2.1
+   python -m pip install shexli==0.2.1 'tree-sitter<0.26'
    shexli --format text dist/vox-sentry@gnome-vox-sentry.shell-extension.zip
    ./scripts/validate-ego-package.sh \
      dist/vox-sentry@gnome-vox-sentry.shell-extension.zip

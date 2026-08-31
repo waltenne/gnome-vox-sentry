@@ -77,7 +77,8 @@ jobs:
         run: |
           python -m venv .ci-venv
           .ci-venv/bin/python -m pip install --upgrade pip
-          .ci-venv/bin/python -m pip install --editable '.[dev]' ruff shexli==0.2.1
+          # shexli 0.2.1 currently crashes with tree-sitter 0.26.x.
+          .ci-venv/bin/python -m pip install --editable '.[dev]' ruff shexli==0.2.1 'tree-sitter<0.26'
 
       - name: Run Python tests and static checks
         run: |
